@@ -87,6 +87,13 @@ public:
 	double m_g; //feedback weight
 	double m_rateOnFirstCNP; // the fraction of line rate to set on first CNP
 	bool m_EcnClampTgtRate;
+
+	// DCQCN++ : switch queue-depth gear driven decrease/increase (route 1)
+	bool m_dcqcnGear;        // enable gear-driven DCQCN
+	uint32_t m_gearLow;      // G_LOW: at/below this gear queue is healthy -> allow increase, no gear decrease
+	uint32_t m_gearHigh;     // G_HIGH: at/above this gear the decrease strength saturates (alpha->1)
+	uint32_t m_gearStop;     // G_STOP: at/above this gear apply emergency brake to floor rate
+	DataRate m_gearFloorRate;// floor rate used by the emergency brake (>0, avoids link starvation)
 	double m_rpgTimeReset;
 	double m_rateDecreaseInterval;
 	uint32_t m_rpgThreshold;

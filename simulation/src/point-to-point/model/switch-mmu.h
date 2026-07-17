@@ -36,6 +36,14 @@ public:
 
 	bool ShouldSendCN(uint32_t ifindex, uint32_t qIndex);
 
+	// DCQCN++: quantize the egress queue depth into 16 gears (0..15), co-designed
+	// with the ECN water-line (kmin/kmax) and the PFC/XOFF point (gear_xoff).
+	//   gear 0..1  : [0, kmin)        healthy band (increase allowed)
+	//   gear 2..9  : [kmin, kmax)     proportional zone (overlaps ECN marking)
+	//   gear 10..15: [kmax, xoff)     danger zone (aggressive decrease / brake)
+	uint32_t GetEcnGear(uint32_t ifindex, uint32_t qIndex);
+	void ConfigGear(uint32_t port, uint32_t _xoff);
+
 	void ConfigEcn(uint32_t port, uint32_t _kmin, uint32_t _kmax, double _pmax);
 	void ConfigHdrm(uint32_t port, uint32_t size);
 	void ConfigNPort(uint32_t n_port);
@@ -50,6 +58,7 @@ public:
 	uint32_t resume_offset;
 	uint32_t kmin[pCnt], kmax[pCnt];
 	double pmax[pCnt];
+	uint32_t gear_xoff[pCnt]; // DCQCN++: queue depth mapped to the top gear (near PFC/XOFF)
 	uint32_t total_hdrm;
 	uint32_t total_rsrv;
 

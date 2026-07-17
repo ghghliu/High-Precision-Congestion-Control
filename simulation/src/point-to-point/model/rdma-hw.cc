@@ -174,6 +174,31 @@ TypeId RdmaHw::GetTypeId (void)
 				UintegerValue(65536),
 				MakeUintegerAccessor(&RdmaHw::pint_smpl_thresh),
 				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("DcqcnGear",
+				"DCQCN++: enable switch queue-depth gear driven decrease/increase",
+				BooleanValue(false),
+				MakeBooleanAccessor(&RdmaHw::m_dcqcnGear),
+				MakeBooleanChecker())
+		.AddAttribute("GearLow",
+				"DCQCN++: G_LOW gear, at/below which the queue is healthy (allow increase)",
+				UintegerValue(1),
+				MakeUintegerAccessor(&RdmaHw::m_gearLow),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("GearHigh",
+				"DCQCN++: G_HIGH gear, at/above which the decrease strength saturates",
+				UintegerValue(14),
+				MakeUintegerAccessor(&RdmaHw::m_gearHigh),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("GearStop",
+				"DCQCN++: G_STOP gear, at/above which the emergency brake fires",
+				UintegerValue(14),
+				MakeUintegerAccessor(&RdmaHw::m_gearStop),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("GearFloorRate",
+				"DCQCN++: floor rate used by the emergency brake (>0)",
+				DataRateValue(DataRate("1000Mb/s")),
+				MakeDataRateAccessor(&RdmaHw::m_gearFloorRate),
+				MakeDataRateChecker())
 		;
 	return tid;
 }
@@ -423,6 +448,27 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch){
 		} 
 	}
 
+	// DCQCN++ : consume the switch queue-depth gear echoed on this ACK
+	if (m_cc_mode == 1 && m_dcqcnGear){
+		uint32_t g = qp->mlx.m_gear = ch.ack.ih.gear;
+		if (g > m_gearLow){
+			// congested per telemetry: drive the periodic decrease even between CNPs.
+			qp->mlx.m_decrease_cnp_arrived = true;
+			// make sure the alpha/decrease control loop is running (in case telemetry
+			// leads the first CNP)
+			if (qp->mlx.m_first_cnp){
+				qp->mlx.m_alpha = 0;
+				ScheduleUpdateAlphaMlx(qp);
+				ScheduleDecreaseRateMlx(qp, 1);
+				qp->mlx.m_first_cnp = false;
+			}
+		}
+		// emergency brake: entering the danger zone -> cut to floor rate immediately
+		if (g >= m_gearStop && qp->m_rate > m_gearFloorRate){
+			qp->mlx.m_targetRate = qp->m_rate = m_gearFloorRate;
+		}
+	}
+
 	if (m_cc_mode == 3){
 		HandleAckHp(qp, p, ch);
 	}else if (m_cc_mode == 7){
@@ -620,10 +666,23 @@ void RdmaHw::UpdateAlphaMlx(Ptr<RdmaQueuePair> q){
 	//std::cout << Simulator::Now() << " alpha update:" << m_node->GetId() << ' ' << q->mlx.m_alpha << ' ' << (int)q->mlx.m_alpha_cnp_arrived << '\n';
 	//printf("%lu alpha update: %08x %08x %u %u %.6lf->", Simulator::Now().GetTimeStep(), q->sip.Get(), q->dip.Get(), q->sport, q->dport, q->mlx.m_alpha);
 	#endif
+	// original binary-CNP EWMA (kept as backup, tolerant to switch sampling misses)
+	double alpha_cnp;
 	if (q->mlx.m_alpha_cnp_arrived){
-		q->mlx.m_alpha = (1 - m_g)*q->mlx.m_alpha + m_g; 	//binary feedback
+		alpha_cnp = (1 - m_g)*q->mlx.m_alpha + m_g; 	//binary feedback
 	}else {
-		q->mlx.m_alpha = (1 - m_g)*q->mlx.m_alpha; 	//binary feedback
+		alpha_cnp = (1 - m_g)*q->mlx.m_alpha; 	//binary feedback
+	}
+	if (m_dcqcnGear){
+		// DCQCN++: derive the target congestion magnitude directly from the
+		// switch queue-depth gear -> one-shot, no slow EWMA ramp-up.
+		double alpha_tele = 0.0;
+		if (q->mlx.m_gear > m_gearLow && m_gearHigh > m_gearLow)
+			alpha_tele = std::min(1.0, double(q->mlx.m_gear - m_gearLow) / double(m_gearHigh - m_gearLow));
+		// telemetry gives the magnitude, CNP EWMA is a floor / backup
+		q->mlx.m_alpha = std::max(alpha_tele, alpha_cnp);
+	}else{
+		q->mlx.m_alpha = alpha_cnp;
 	}
 	#if PRINT_LOG
 	//printf("%.6lf\n", q->mlx.m_alpha);
@@ -686,6 +745,13 @@ void RdmaHw::RateIncEventTimerMlx(Ptr<RdmaQueuePair> q){
 	q->mlx.m_rpTimeStage++;
 }
 void RdmaHw::RateIncEventMlx(Ptr<RdmaQueuePair> q){
+	// DCQCN++: gate increase on the switch gear. Only probe up when the queue is
+	// healthy (gear <= G_LOW); otherwise hold and reset the stage so that when the
+	// queue does drain we resume from fast-recovery instead of hyper-increase.
+	if (m_dcqcnGear && q->mlx.m_gear > m_gearLow){
+		q->mlx.m_rpTimeStage = 0;
+		return;
+	}
 	// check which increase phase: fast recovery, active increase, hyper increase
 	if (q->mlx.m_rpTimeStage < m_rpgThreshold){ // fast recovery
 		FastRecoveryMlx(q);

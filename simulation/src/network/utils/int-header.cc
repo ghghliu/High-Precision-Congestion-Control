@@ -20,6 +20,8 @@ uint32_t IntHeader::GetStaticSize(){
 		return sizeof(ts);
 	}else if (mode == PINT){
 		return sizeof(pint);
+	}else if (mode == GEAR){
+		return sizeof(gear);
 	}else {
 		return 0;
 	}
@@ -49,6 +51,8 @@ void IntHeader::Serialize (Buffer::Iterator start) const{
 			i.WriteU8(pint.power_lo8);
 		else if (pint_bytes == 2)
 			i.WriteU16(pint.power);
+	}else if (mode == GEAR){
+		i.WriteU8(gear);
 	}
 }
 
@@ -67,6 +71,8 @@ uint32_t IntHeader::Deserialize (Buffer::Iterator start){
 			pint.power_lo8 = i.ReadU8();
 		else if (pint_bytes == 2)
 			pint.power = i.ReadU16();
+	}else if (mode == GEAR){
+		gear = i.ReadU8();
 	}
 	return GetStaticSize();
 }

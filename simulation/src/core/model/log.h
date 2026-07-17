@@ -319,7 +319,7 @@ void LogComponentDisableAll (enum LogLevel level);
           NS_LOG_APPEND_CONTEXT;                                \
           std::clog << g_log.Name () << ":"                     \
                     << __FUNCTION__ << "(";                     \
-          ns3::ParameterLogger (std::clog) << parameters;      \
+          ns3::ParameterLogger (std::clog).Log() << parameters; \
           std::clog << ")" << std::endl;                        \
         }                                                       \
     }                                                           \
@@ -404,6 +404,13 @@ class ParameterLogger : public std::ostream
   std::ostream &m_os;
 public:
   ParameterLogger (std::ostream &os);
+
+  // Return an lvalue reference to this logger. Needed so that the streaming
+  // expression in NS_LOG_FUNCTION binds to the member operator<< below rather
+  // than the C++11 rvalue std::operator<<(ostream&&, const T&) overload (which
+  // is ambiguous with modern libstdc++ when the ParameterLogger temporary is an
+  // rvalue).
+  ParameterLogger& Log () { return *this; }
 
   template<typename T>
   ParameterLogger& operator<< (T param)

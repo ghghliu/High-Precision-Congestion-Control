@@ -640,6 +640,9 @@ int main(int argc, char *argv[])
 			}else if (key.compare("QLEN_MON_END") == 0){
 				conf >> qlen_mon_end;
 				std::cout << "QLEN_MON_END\t\t\t\t" << qlen_mon_end << '\n';
+			}else if (key.compare("QLEN_DUMP_INTERVAL") == 0){
+				conf >> qlen_dump_interval;
+				std::cout << "QLEN_DUMP_INTERVAL\t\t\t\t" << qlen_dump_interval << '\n';
 			}else if (key.compare("MULTI_RATE") == 0){
 				int v;
 				conf >> v;

@@ -70,6 +70,12 @@ double u_target = 0.95;
 uint32_t int_multi = 1;
 bool rate_bound = true;
 
+// DCQCN++ : switch queue-depth gear driven decrease/increase (route 1)
+bool dcqcn_gear = false;
+uint32_t gear_low = 1, gear_high = 14, gear_stop = 14;
+std::string gear_floor_rate = "1000Mb/s";
+uint32_t gear_xoff = 2048; // queue depth (in KB) mapped to the top gear (near PFC/XOFF)
+
 uint32_t ack_high_prio = 0;
 uint64_t link_down_time = 0;
 uint32_t link_down_A = 0, link_down_B = 0;
@@ -634,6 +640,9 @@ int main(int argc, char *argv[])
 			}else if (key.compare("QLEN_MON_END") == 0){
 				conf >> qlen_mon_end;
 				std::cout << "QLEN_MON_END\t\t\t\t" << qlen_mon_end << '\n';
+			}else if (key.compare("QLEN_DUMP_INTERVAL") == 0){
+				conf >> qlen_dump_interval;
+				std::cout << "QLEN_DUMP_INTERVAL\t\t\t\t" << qlen_dump_interval << '\n';
 			}else if (key.compare("MULTI_RATE") == 0){
 				int v;
 				conf >> v;
@@ -650,6 +659,26 @@ int main(int argc, char *argv[])
 			}else if (key.compare("PINT_PROB") == 0){
 				conf >> pint_prob;
 				std::cout << "PINT_PROB\t\t\t\t" << pint_prob << '\n';
+			}else if (key.compare("DCQCN_GEAR") == 0){
+				uint32_t v;
+				conf >> v;
+				dcqcn_gear = v;
+				std::cout << "DCQCN_GEAR\t\t\t\t" << dcqcn_gear << '\n';
+			}else if (key.compare("GEAR_LOW") == 0){
+				conf >> gear_low;
+				std::cout << "GEAR_LOW\t\t\t\t" << gear_low << '\n';
+			}else if (key.compare("GEAR_HIGH") == 0){
+				conf >> gear_high;
+				std::cout << "GEAR_HIGH\t\t\t\t" << gear_high << '\n';
+			}else if (key.compare("GEAR_STOP") == 0){
+				conf >> gear_stop;
+				std::cout << "GEAR_STOP\t\t\t\t" << gear_stop << '\n';
+			}else if (key.compare("GEAR_FLOOR_RATE") == 0){
+				conf >> gear_floor_rate;
+				std::cout << "GEAR_FLOOR_RATE\t\t\t\t" << gear_floor_rate << '\n';
+			}else if (key.compare("GEAR_XOFF") == 0){
+				conf >> gear_xoff;
+				std::cout << "GEAR_XOFF\t\t\t\t" << gear_xoff << '\n';
 			}
 			fflush(stdout);
 		}
@@ -678,6 +707,8 @@ int main(int argc, char *argv[])
 		IntHeader::mode = IntHeader::NORMAL;
 	else if (cc_mode == 10) // hpcc-pint
 		IntHeader::mode = IntHeader::PINT;
+	else if (cc_mode == 1 && dcqcn_gear) // DCQCN++ : carry a 1-byte switch queue-depth gear
+		IntHeader::mode = IntHeader::GEAR;
 	else // others, no extra header
 		IntHeader::mode = IntHeader::NONE;
 
@@ -831,6 +862,8 @@ int main(int argc, char *argv[])
 				NS_ASSERT_MSG(rate2kmax.find(rate) != rate2kmax.end(), "must set kmax for each link speed");
 				NS_ASSERT_MSG(rate2pmax.find(rate) != rate2pmax.end(), "must set pmax for each link speed");
 				sw->m_mmu->ConfigEcn(j, rate2kmin[rate], rate2kmax[rate], rate2pmax[rate]);
+				// DCQCN++ : queue depth (KB) mapped to the top gear (near PFC/XOFF)
+				sw->m_mmu->ConfigGear(j, gear_xoff * 1000);
 				// set pfc
 				uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
 				uint32_t headroom = rate * delay / 8 / 1000000000 * 3;
@@ -880,6 +913,11 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("TargetUtil", DoubleValue(u_target));
 			rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
 			rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
+			rdmaHw->SetAttribute("DcqcnGear", BooleanValue(dcqcn_gear));
+			rdmaHw->SetAttribute("GearLow", UintegerValue(gear_low));
+			rdmaHw->SetAttribute("GearHigh", UintegerValue(gear_high));
+			rdmaHw->SetAttribute("GearStop", UintegerValue(gear_stop));
+			rdmaHw->SetAttribute("GearFloorRate", DataRateValue(DataRate(gear_floor_rate)));
 			rdmaHw->SetPintSmplThresh(pint_prob);
 			// create and install RdmaDriver
 			Ptr<RdmaDriver> rdma = CreateObject<RdmaDriver>();

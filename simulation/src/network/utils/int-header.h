@@ -80,6 +80,7 @@ public:
 		NORMAL = 0,
 		TS = 1,
 		PINT = 2,
+		GEAR = 3, // DCQCN++: carry a single-byte switch queue-depth gear (0..15)
 		NONE
 	};
 	static Mode mode;
@@ -98,6 +99,7 @@ public:
 				uint8_t power_lo8, power_hi8;
 			};
 		}pint;
+		uint8_t gear; // DCQCN++: switch queue-depth gear (GEAR mode only)
 	};
 
 	IntHeader();

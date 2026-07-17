@@ -32,6 +32,7 @@ namespace ns3 {
 		memset(ingress_bytes, 0, sizeof(ingress_bytes));
 		memset(paused, 0, sizeof(paused));
 		memset(egress_bytes, 0, sizeof(egress_bytes));
+		memset(gear_xoff, 0, sizeof(gear_xoff));
 	}
 	bool SwitchMmu::CheckIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize){
 		if (psize + hdrm_bytes[port][qIndex] > headroom[port] && psize + GetSharedUsed(port, qIndex) > GetPfcThreshold(port)){
@@ -107,6 +108,34 @@ namespace ns3 {
 				return true;
 		}
 		return false;
+	}
+	uint32_t SwitchMmu::GetEcnGear(uint32_t ifindex, uint32_t qIndex){
+		if (qIndex == 0)
+			return 0;
+		uint32_t q = egress_bytes[ifindex][qIndex];
+		uint32_t lo = kmin[ifindex], hi = kmax[ifindex];
+		// fall back to 2*kmax as the top-gear queue depth if XOFF wasn't configured
+		uint32_t xoff = (gear_xoff[ifindex] > hi) ? gear_xoff[ifindex] : 2 * hi;
+		if (hi <= lo)
+			return q >= hi ? 15 : 0;
+		uint32_t g = 0;
+		for (int i = 15; i >= 1; --i){
+			uint32_t th;
+			if (i == 1)
+				th = lo / 2;                                              // healthy band
+			else if (i <= 9)
+				th = lo + (uint32_t)((uint64_t)(hi - lo) * (i - 2) / 8);  // proportional zone
+			else
+				th = hi + (uint32_t)((uint64_t)(xoff - hi) * (i - 10) / 6); // danger zone
+			if (q >= th){
+				g = (uint32_t)i;
+				break;
+			}
+		}
+		return g;
+	}
+	void SwitchMmu::ConfigGear(uint32_t port, uint32_t _xoff){
+		gear_xoff[port] = _xoff;
 	}
 	void SwitchMmu::ConfigEcn(uint32_t port, uint32_t _kmin, uint32_t _kmax, double _pmax){
 		kmin[port] = _kmin * 1000;

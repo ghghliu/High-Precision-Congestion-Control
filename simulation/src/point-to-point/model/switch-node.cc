@@ -222,6 +222,10 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
 			Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(m_devices[ifIndex]);
 			if (m_ccMode == 3){ // HPCC
 				ih->PushHop(Simulator::Now().GetTimeStep(), m_txBytes[ifIndex], dev->GetQueue()->GetNBytesTotal(), dev->GetDataRate().GetBitRate());
+			}else if (m_ccMode == 1){ // DCQCN++ : carry the per-hop queue-depth gear (max along path)
+				uint32_t g = m_mmu->GetEcnGear(ifIndex, qIndex);
+				if (g > ih->gear)
+					ih->gear = (uint8_t)g;
 			}else if (m_ccMode == 10){ // HPCC-PINT
 				uint64_t t = Simulator::Now().GetTimeStep();
 				uint64_t dt = t - m_lastPktTs[ifIndex];

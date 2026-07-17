@@ -44,6 +44,7 @@ public:
 		bool m_decrease_cnp_arrived; // indicate if CNP arrived in the last slot
 		uint32_t m_rpTimeStage;
 		EventId m_rpTimer;
+		uint32_t m_gear; // DCQCN++: latest switch queue-depth gear (0..15) seen on returning ACKs
 	} mlx;
 	struct {
 		uint32_t m_lastUpdateSeq;

@@ -103,24 +103,34 @@ def analyze_hol(mix_dir: str, ccs: List[str]) -> None:
 
 
 def analyze_sf(mix_dir: str, ccs: List[str]) -> None:
-    print("\n=== B2 Small-flow (elephant + late short flows) ===")
+    print("\n=== B2 Small-flow (7:1 incast + late probe) ===")
     for cc in ccs:
         fct = load_fct(os.path.join(mix_dir, f"fct_bench_sf_bench_sf_flow_{cc}.txt"))
         pfc = load_pfc(os.path.join(mix_dir, f"pfc_bench_sf_bench_sf_flow_{cc}.txt"))
         print(f"\n-- {cc} --")
-        elephant = [r for r in fct if r["size"] >= 1_000_000]
-        small = [r for r in fct if r["size"] < 1_000_000]
-        summarize_flows(elephant, "elephant")
-        summarize_flows(small, "small")
+        # Concurrent 5MB incast members vs late 200KB probe (dport 107)
+        incast = [r for r in fct if r["dport"] != 107]
+        probe = [r for r in fct if r["dport"] == 107]
+        summarize_flows(incast, "incast 5MB")
+        summarize_flows(probe, "late probe 200KB")
         ps = pfc_stats(pfc)
         print(
             f"  PFC pause={ps['pause_events']} resume={ps['resume_events']} "
             f"by_node={ps['pause_by_node']}"
         )
-        if small:
-            # Ideal 100KB @ 400G ~= 2us + RTT; report how far we are from standalone
-            avg_slow = sum(r["fct_ns"] / max(r["standalone_ns"], 1) for r in small) / len(small)
-            print(f"  small-flow avg slowdown vs standalone={avg_slow:.2f}x")
+        if incast:
+            # Aggregate goodput of the concurrent cohort (bytes*8 / makespan)
+            start = min(r["start_ns"] for r in incast)
+            end = max(r["start_ns"] + r["fct_ns"] for r in incast)
+            total_b = sum(r["size"] for r in incast)
+            makespan = max(end - start, 1)
+            print(
+                f"  incast cohort makespan_ns={makespan} "
+                f"agg_goodput_Gbps={total_b * 8.0 / makespan:.2f}"
+            )
+        if probe:
+            avg_slow = sum(r["fct_ns"] / max(r["standalone_ns"], 1) for r in probe) / len(probe)
+            print(f"  probe avg slowdown vs standalone={avg_slow:.2f}x")
 
 
 def main() -> None:

@@ -89,13 +89,14 @@ if __name__ == "__main__":
 	parser.add_argument('--stop', dest='stop', action='store', type=float, default=4.0, help="simulator stop time (seconds)")
 	parser.add_argument('--trace_nodes', dest='trace_nodes', action='store', default='trace', help="trace node list file under mix/")
 	parser.add_argument('--dry_run', dest='dry_run', action='store_true', default=False, help="only write config, do not run")
+	parser.add_argument('--buffer', dest='buffer', action='store', type=int, default=0, help="switch buffer size in MB (0 = scale with bw)")
 	args = parser.parse_args()
 
 	topo=args.topo
 	bw = int(args.bw)
 	trace = args.trace
 	#bfsz = 16 if bw==50 else 32
-	bfsz = 16 * bw / 50
+	bfsz = args.buffer if args.buffer > 0 else (16 * bw / 50)
 	u_tgt=args.utgt/100.
 	mi=args.mi
 	pint_log_base=args.pint_log_base

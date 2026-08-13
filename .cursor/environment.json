@@ -1,0 +1,8 @@
+{
+  "name": "HPCC NS-3 Simulator",
+  "user": "ubuntu",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "install": "cd simulation && CC=gcc CXX=g++ ./waf configure && ./waf build -j$(nproc)"
+}

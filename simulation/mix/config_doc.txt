@@ -1,4 +1,4 @@
-ENABLE_QCN 1 {0: disable, 1: enable}
+ENABLE_QCN 1 {0: disable, 1: enable. For PFC-only baseline use run.py --cc pfc (sets ENABLE_QCN 0)}
 USE_DYNAMIC_PFC_THRESHOLD 1 {0: disable, 1: enable}
 
 PACKET_PAYLOAD_SIZE 1000 {packet size (bytes)}
@@ -12,7 +12,7 @@ PFC_OUTPUT_FILE mix/pfc.txt {output file: result of PFC}
 
 SIMULATOR_STOP_TIME 4.00 {simulation stop time}
 
-CC_MODE 3 {Specifying different CC. 1: DCQCN, 3: HPCC, 7: TIMELY, 8: DCTCP, 10: HPCC-PINT}
+CC_MODE 3 {Specifying different CC. 1: DCQCN (also used with ENABLE_QCN 0 for PFC-only), 3: HPCC, 7: TIMELY, 8: DCTCP, 10: HPCC-PINT}
 ALPHA_RESUME_INTERVAL 1 {for DCQCN: the interval of update alpha}
 RATE_DECREASE_INTERVAL 4 {for DCQCN: the interval of rate decrease}
 CLAMP_TARGET_RATE 0 {for DCQCN: whether to reduce target rate upon consecutive rate decrease}

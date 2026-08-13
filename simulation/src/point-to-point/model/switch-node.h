@@ -33,6 +33,21 @@ protected:
 
 	uint32_t m_ackHighPrio; // set high priority for ACK/NACK
 
+	// On/Off CC (mode 12): switch-generated "back to sender" ON notification.
+	// The switch periodically (every m_btsSense) samples each egress port's queue
+	// depth and stores it as a 16-level (4-bit) value in m_qLevel. When a data
+	// packet is dequeued after experiencing a queuing delay > m_btsDelayThresh,
+	// the switch sends an ON notification carrying m_qLevel back to that packet's
+	// source, arriving after m_btsSig. (OFF stays on the ECN->CNP path.)
+	uint64_t m_btsSense;        // queue-level table update period (ns)
+	uint64_t m_btsSig;          // switch->source signaling delay (ns)
+	uint64_t m_btsDelayThresh;  // per-packet queuing delay that triggers a BTS (ns)
+	uint64_t m_btsLevelUnit;    // bytes per quantized queue level (16 levels)
+	uint32_t m_qLevel[pCnt];    // periodically-updated quantized queue level per port
+	bool m_btsStarted;
+	std::unordered_map<uint64_t, uint64_t> m_lastBts; // (port,src) -> last BTS time (ns), rate-limits to 1/sense
+	void BtsSampleQueues();
+
 private:
 	int GetOutDev(Ptr<const Packet>, CustomHeader &ch);
 	void SendToDev(Ptr<Packet>p, CustomHeader &ch);

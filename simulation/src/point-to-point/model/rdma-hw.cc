@@ -24,16 +24,6 @@ TypeId RdmaHw::GetTypeId (void)
 				DataRateValue(DataRate("100Mb/s")),
 				MakeDataRateAccessor(&RdmaHw::m_minRate),
 				MakeDataRateChecker())
-		.AddAttribute("OnOffTSense",
-				"On/Off CC: switch congestion-sensing delay (ns)",
-				UintegerValue(8000),
-				MakeUintegerAccessor(&RdmaHw::m_onoff_t_sense),
-				MakeUintegerChecker<uint64_t>())
-		.AddAttribute("OnOffTSig",
-				"On/Off CC: switch->source signaling delay (ns)",
-				UintegerValue(8000),
-				MakeUintegerAccessor(&RdmaHw::m_onoff_t_sig),
-				MakeUintegerChecker<uint64_t>())
 		.AddAttribute("OnOffTNicMin",
 				"On/Off CC: minimum NIC processing delay (ns)",
 				UintegerValue(16000),
@@ -272,8 +262,9 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 	}else if (m_cc_mode == 10){
 		qp->hpccPint.m_curRate = m_bps;
 	}else if (m_cc_mode == 12){
-		qp->onoff.congested = false; // start "on" at full line rate
-		qp->onoff.gen = 0;
+		qp->onoff.applied = false; // start "on" at full line rate
+		qp->onoff.target = false;
+		qp->onoff.pending = false;
 	}
 
 	// Notify Nic
@@ -639,27 +630,52 @@ void RdmaHw::ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate){
 /******************************
  * On/Off CC (mode 12)
  *****************************/
+std::map<uint32_t, Ptr<RdmaHw> > RdmaHw::m_rdmaHwMap;
+
+// OFF path: driven by ECN mark echoed as CNP in the ACK (guarantees per-flow
+// feedback). We only turn OFF here; ON comes from the switch back-to-sender.
 void RdmaHw::HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested){
-	// Only react on a change of the (binary) congestion signal.
-	if (congested == qp->onoff.congested)
-		return;
-	qp->onoff.congested = congested;
-	uint64_t gen = ++qp->onoff.gen;
-	DataRate target = congested ? m_minRate : qp->m_max_rate; // off=250Mbps / on=line rate
-	// Hardware-limited control-loop delay:
-	//   switch sensing + switch->source signaling + jittered NIC processing.
-	uint64_t nic = m_onoff_t_nic_min;
-	if (m_onoff_t_nic_max > m_onoff_t_nic_min)
-		nic += (uint64_t)((double)rand() / RAND_MAX * (m_onoff_t_nic_max - m_onoff_t_nic_min));
-	uint64_t delay = m_onoff_t_sense + m_onoff_t_sig + nic;
-	Simulator::Schedule(NanoSeconds(delay), &RdmaHw::OnOffApply, this, qp, target, gen);
+	if (congested)
+		OnOffSignal(qp, true);
 }
 
-void RdmaHw::OnOffApply(Ptr<RdmaQueuePair> qp, DataRate rate, uint64_t gen){
-	// Drop stale applies that a newer signal transition has superseded.
-	if (gen != qp->onoff.gen)
+// ON path: a SwitchNode delivers a back-to-sender notification to this source
+// (already delayed by the switch->source signaling delay). qlevel is carried
+// for future use (e.g. treating a very high level as an OFF signal).
+void RdmaHw::DeliverBtsOn(uint32_t srcNodeId, uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel){
+	auto it = m_rdmaHwMap.find(srcNodeId);
+	if (it == m_rdmaHwMap.end())
 		return;
-	ChangeRate(qp, rate);
+	it->second->OnOffBtsOn(dip, sport, pg, qlevel);
+}
+
+void RdmaHw::OnOffBtsOn(uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel){
+	Ptr<RdmaQueuePair> qp = GetQp(dip, sport, pg);
+	if (qp == NULL)
+		return;
+	OnOffSignal(qp, false); // notification arrival = ON
+}
+
+// Latch the latest on/off signal. The NIC can process one transition at a time;
+// while it is "busy" for the (jittered) processing delay, later signals only
+// update the target, and the most-recent target is applied when it frees.
+void RdmaHw::OnOffSignal(Ptr<RdmaQueuePair> qp, bool congested){
+	qp->onoff.target = congested;
+	if (!qp->onoff.pending && qp->onoff.target != qp->onoff.applied){
+		qp->onoff.pending = true;
+		uint64_t nic = m_onoff_t_nic_min;
+		if (m_onoff_t_nic_max > m_onoff_t_nic_min)
+			nic += (uint64_t)((double)rand() / RAND_MAX * (m_onoff_t_nic_max - m_onoff_t_nic_min));
+		Simulator::Schedule(NanoSeconds(nic), &RdmaHw::OnOffApply, this, qp);
+	}
+}
+
+void RdmaHw::OnOffApply(Ptr<RdmaQueuePair> qp){
+	qp->onoff.pending = false;
+	if (qp->onoff.target != qp->onoff.applied){
+		qp->onoff.applied = qp->onoff.target;
+		ChangeRate(qp, qp->onoff.applied ? m_minRate : qp->m_max_rate);
+	}
 }
 
 #define PRINT_LOG 0

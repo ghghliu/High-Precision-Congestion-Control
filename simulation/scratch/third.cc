@@ -71,6 +71,7 @@ uint32_t int_multi = 1;
 bool rate_bound = true;
 // On/Off CC (mode 12) hardware-limited control-loop delays (ns)
 uint64_t onoff_t_sense = 8000, onoff_t_sig = 8000, onoff_t_nic_min = 16000, onoff_t_nic_max = 100000;
+uint64_t onoff_bts_delay_thresh = 5000, onoff_bts_level_unit = 30000;
 
 uint32_t ack_high_prio = 0;
 uint64_t link_down_time = 0;
@@ -549,6 +550,12 @@ int main(int argc, char *argv[])
 			}else if (key.compare("ONOFF_T_NIC_MAX") == 0){
 				conf >> onoff_t_nic_max;
 				std::cout << "ONOFF_T_NIC_MAX\t\t" << onoff_t_nic_max << "\n";
+			}else if (key.compare("ONOFF_BTS_DELAY_THRESH") == 0){
+				conf >> onoff_bts_delay_thresh;
+				std::cout << "ONOFF_BTS_DELAY_THRESH\t\t" << onoff_bts_delay_thresh << "\n";
+			}else if (key.compare("ONOFF_BTS_LEVEL_UNIT") == 0){
+				conf >> onoff_bts_level_unit;
+				std::cout << "ONOFF_BTS_LEVEL_UNIT\t\t" << onoff_bts_level_unit << "\n";
 			}else if (key.compare("MIN_RATE") == 0){
 				conf >> min_rate;
 				std::cout << "MIN_RATE\t\t" << min_rate << "\n";
@@ -885,8 +892,6 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("CcMode", UintegerValue(cc_mode));
 			rdmaHw->SetAttribute("RateDecreaseInterval", DoubleValue(rate_decrease_interval));
 			rdmaHw->SetAttribute("MinRate", DataRateValue(DataRate(min_rate)));
-			rdmaHw->SetAttribute("OnOffTSense", UintegerValue(onoff_t_sense));
-			rdmaHw->SetAttribute("OnOffTSig", UintegerValue(onoff_t_sig));
 			rdmaHw->SetAttribute("OnOffTNicMin", UintegerValue(onoff_t_nic_min));
 			rdmaHw->SetAttribute("OnOffTNicMax", UintegerValue(onoff_t_nic_max));
 			rdmaHw->SetAttribute("Mtu", UintegerValue(packet_payload_size));
@@ -899,6 +904,7 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
 			rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
 			rdmaHw->SetPintSmplThresh(pint_prob);
+			RdmaHw::m_rdmaHwMap[i] = rdmaHw; // register for switch back-to-sender ON delivery
 			// create and install RdmaDriver
 			Ptr<RdmaDriver> rdma = CreateObject<RdmaDriver>();
 			Ptr<Node> node = n.Get(i);
@@ -955,6 +961,10 @@ int main(int argc, char *argv[])
 			Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(i));
 			sw->SetAttribute("CcMode", UintegerValue(cc_mode));
 			sw->SetAttribute("MaxRtt", UintegerValue(maxRtt));
+			sw->SetAttribute("BtsSense", UintegerValue(onoff_t_sense));
+			sw->SetAttribute("BtsSig", UintegerValue(onoff_t_sig));
+			sw->SetAttribute("BtsDelayThresh", UintegerValue(onoff_bts_delay_thresh));
+			sw->SetAttribute("BtsLevelUnit", UintegerValue(onoff_bts_level_unit));
 		}
 	}
 

@@ -3,6 +3,7 @@
 #include "ns3/ipv4-header.h"
 #include "ns3/pause-header.h"
 #include "ns3/flow-id-tag.h"
+#include "ns3/tag.h"
 #include "ns3/boolean.h"
 #include "ns3/uinteger.h"
 #include "ns3/double.h"
@@ -10,9 +11,28 @@
 #include "qbb-net-device.h"
 #include "ppp-header.h"
 #include "ns3/int-header.h"
+#include "rdma-hw.h"
 #include <cmath>
 
 namespace ns3 {
+
+// Packet tag that records the time a packet entered a switch egress queue, so
+// the per-packet queuing delay can be computed on dequeue (used by on/off CC).
+class QueueDelayTag : public Tag {
+public:
+	static TypeId GetTypeId (void){
+		static TypeId tid = TypeId("ns3::QueueDelayTag").SetParent<Tag>().AddConstructor<QueueDelayTag>();
+		return tid;
+	}
+	virtual TypeId GetInstanceTypeId (void) const { return GetTypeId(); }
+	virtual uint32_t GetSerializedSize (void) const { return 8; }
+	virtual void Serialize (TagBuffer i) const { i.WriteU64(m_t); }
+	virtual void Deserialize (TagBuffer i) { m_t = i.ReadU64(); }
+	virtual void Print (std::ostream &os) const { os << m_t; }
+	void SetTime(uint64_t t){ m_t = t; }
+	uint64_t GetTime(void) const { return m_t; }
+	uint64_t m_t;
+};
 
 TypeId SwitchNode::GetTypeId (void)
 {
@@ -39,6 +59,26 @@ TypeId SwitchNode::GetTypeId (void)
 			UintegerValue(9000),
 			MakeUintegerAccessor(&SwitchNode::m_maxRtt),
 			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("BtsSense",
+			"On/Off CC: queue-level table update period (ns)",
+			UintegerValue(8000),
+			MakeUintegerAccessor(&SwitchNode::m_btsSense),
+			MakeUintegerChecker<uint64_t>())
+	.AddAttribute("BtsSig",
+			"On/Off CC: switch->source ON-notification signaling delay (ns)",
+			UintegerValue(8000),
+			MakeUintegerAccessor(&SwitchNode::m_btsSig),
+			MakeUintegerChecker<uint64_t>())
+	.AddAttribute("BtsDelayThresh",
+			"On/Off CC: per-packet queuing delay that triggers a back-to-sender ON (ns)",
+			UintegerValue(5000),
+			MakeUintegerAccessor(&SwitchNode::m_btsDelayThresh),
+			MakeUintegerChecker<uint64_t>())
+	.AddAttribute("BtsLevelUnit",
+			"On/Off CC: bytes per quantized queue level (16 levels)",
+			UintegerValue(30000),
+			MakeUintegerAccessor(&SwitchNode::m_btsLevelUnit),
+			MakeUintegerChecker<uint64_t>())
   ;
   return tid;
 }
@@ -57,6 +97,25 @@ SwitchNode::SwitchNode(){
 		m_lastPktSize[i] = m_lastPktTs[i] = 0;
 	for (uint32_t i = 0; i < pCnt; i++)
 		m_u[i] = 0;
+	for (uint32_t i = 0; i < pCnt; i++)
+		m_qLevel[i] = 0;
+	m_btsStarted = false;
+	m_btsSense = 8000; m_btsSig = 8000; m_btsDelayThresh = 5000; m_btsLevelUnit = 30000;
+}
+
+// On/off CC: periodically sample each egress port's queue depth and store it as
+// a 16-level (4-bit) value, modeling the switch updating a queue-depth table.
+void SwitchNode::BtsSampleQueues(){
+	for (uint32_t i = 1; i < GetNDevices(); i++){
+		Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(m_devices[i]);
+		if (dev == 0) continue;
+		uint64_t qb = dev->GetQueue()->GetNBytesTotal();
+		uint32_t lvl = (uint32_t)(qb / m_btsLevelUnit);
+		if (lvl > 15) lvl = 15;
+		m_qLevel[i] = lvl;
+	}
+	uint64_t per = m_btsSense ? m_btsSense : 1000; // guard against 0 (would loop at t=0)
+	Simulator::Schedule(NanoSeconds(per), &SwitchNode::BtsSampleQueues, this);
 }
 
 int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
@@ -130,6 +189,11 @@ void SwitchNode::SendToDev(Ptr<Packet>p, CustomHeader &ch){
 			CheckAndSendPfc(inDev, qIndex);
 		}
 		m_bytes[inDev][idx][qIndex] += p->GetSize();
+		if (m_ccMode == 12){ // on/off CC: stamp egress-enqueue time for per-packet queuing delay
+			QueueDelayTag qt; p->RemovePacketTag(qt);
+			qt.SetTime(Simulator::Now().GetTimeStep());
+			p->AddPacketTag(qt);
+		}
 		m_devices[idx]->SwitchSend(qIndex, p, ch);
 	}else
 		return; // Drop
@@ -214,6 +278,37 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
 		}
 		//CheckAndSendPfc(inDev, qIndex);
 		CheckAndSendResume(inDev, qIndex);
+
+		// On/off CC: if this data packet experienced a queuing delay above the
+		// threshold, send a back-to-sender ON notification to its source.
+		if (m_ccMode == 12){
+			if (!m_btsStarted){ m_btsStarted = true; BtsSampleQueues(); }
+			QueueDelayTag qt;
+			if (p->PeekPacketTag(qt)){
+				uint64_t qdelay = Simulator::Now().GetTimeStep() - qt.GetTime();
+				if (qdelay > m_btsDelayThresh){
+					uint8_t* buf = p->GetBuffer();
+					uint32_t ppp = PppHeader::GetStaticSize();
+					if (buf[ppp + 9] == 0x11){ // UDP data packet
+						uint32_t sip = (uint32_t(buf[ppp+12])<<24)|(uint32_t(buf[ppp+13])<<16)|(uint32_t(buf[ppp+14])<<8)|uint32_t(buf[ppp+15]);
+						uint32_t dip = (uint32_t(buf[ppp+16])<<24)|(uint32_t(buf[ppp+17])<<16)|(uint32_t(buf[ppp+18])<<8)|uint32_t(buf[ppp+19]);
+						uint16_t sport = (uint16_t(buf[ppp+20])<<8)|uint16_t(buf[ppp+21]);
+						uint32_t a = sip - 0x0b000001;
+						uint32_t srcNode = ((a>>16)&0xff)*256 + ((a>>8)&0xff);
+						// Rate-limit: at most one back-to-sender per source per table-update
+						// period (the queue-level table only refreshes every m_btsSense).
+						uint64_t key = ((uint64_t)ifIndex << 32) | srcNode;
+						uint64_t now = Simulator::Now().GetTimeStep();
+						uint64_t per = m_btsSense ? m_btsSense : 1000; // guard 0 -> no per-packet storm
+						auto it = m_lastBts.find(key);
+						if (it == m_lastBts.end() || now - it->second >= per){
+							m_lastBts[key] = now;
+							Simulator::Schedule(NanoSeconds(m_btsSig), &RdmaHw::DeliverBtsOn, srcNode, dip, sport, (uint16_t)qIndex, m_qLevel[ifIndex]);
+						}
+					}
+				}
+			}
+		}
 	}
 	if (1){
 		uint8_t* buf = p->GetBuffer();

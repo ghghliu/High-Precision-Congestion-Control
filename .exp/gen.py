@@ -105,6 +105,8 @@ ONOFF_T_SENSE {t_sense}
 ONOFF_T_SIG {t_sig}
 ONOFF_T_NIC_MIN {t_nic_min}
 ONOFF_T_NIC_MAX {t_nic_max}
+ONOFF_BTS_DELAY_THRESH {bts_thresh}
+ONOFF_BTS_LEVEL_UNIT {bts_unit}
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 4000
 L2_ACK_INTERVAL 1
@@ -136,6 +138,7 @@ QLEN_MON_END 2000000001
 def write_cfg(name, **kw):
     d = dict(croot=CROOT, out=OUT_C, int_multi=1, min_rate="1000Mb/s",
              t_sense=0, t_sig=0, t_nic_min=0, t_nic_max=0,
+             bts_thresh=5000, bts_unit=30000,
              kmax=KMAX_STD, kmin=KMIN_STD, pmax=PMAX_STD, name=name)
     d.update(kw)
     with open("%s/config_%s.txt" % (HROOT, name), "w") as f:
@@ -160,7 +163,9 @@ for exp, sc in scen.items():
                   tr=sc["tr"], qcn=qcn, mode=mode, ai=ai, hai=hai, has_win=hw, vwin=vw,
                   fr=fr, ack=ack, int_multi=im)
 
-# ---------------- On/Off CC (mode 12) delay sweep on scenario C ----------------
+# ---------------- On/Off CC (mode 12) hardware sweep on scenario C ----------------
+# sense = switch queue-table update period; sig = switch->source signaling delay;
+# nic = jittered NIC processing delay (the 3 cases the user asked for).
 def onoff_cfg(name, t_sense, t_sig, t_nic_min, t_nic_max):
     sc = scen["C"]
     write_cfg("onoff_%s_C" % name, flow=sc["flow"], trace=sc["trace"], stop=sc["stop"], tr=sc["tr"],
@@ -169,14 +174,17 @@ def onoff_cfg(name, t_sense, t_sig, t_nic_min, t_nic_max):
               t_sense=t_sense, t_sig=t_sig, t_nic_min=t_nic_min, t_nic_max=t_nic_max)
 
 onoff_runs = []
-onoff_cfg("ideal", 0, 0, 0, 0); onoff_runs.append("ideal")   # no hardware delay (best case)
-for ts in (4000, 8000, 16000):
-    for tg in (4000, 8000, 16000):
-        nm = "s%dg%d" % (ts//1000, tg//1000)
-        onoff_cfg(nm, ts, tg, 16000, 100000); onoff_runs.append(nm)   # NIC jitter 16-100us
-# isolate NIC delay effect at fixed sense/sig = 8us
-for lo, hi, tag in ((16000,16000,"nic16"), (100000,100000,"nic100")):
-    onoff_cfg("s8g8_%s" % tag, 8000, 8000, lo, hi); onoff_runs.append("s8g8_%s" % tag)
+onoff_cfg("ideal", 0, 0, 0, 0); onoff_runs.append("ideal")     # no hardware delay
+# 3 NIC cases at sense=8us, sig=8us
+onoff_cfg("nic4",    8000, 8000, 4000, 4000);   onoff_runs.append("nic4")    # fixed 4us
+onoff_cfg("nic4_32", 8000, 8000, 4000, 32000);  onoff_runs.append("nic4_32") # 4-32us
+onoff_cfg("nic4_100",8000, 8000, 4000, 100000); onoff_runs.append("nic4_100")# 4-100us
+# sense sweep {1,4,8,16}us (sig=8, nic 4-32)
+for ts in (1000, 4000, 16000):
+    onoff_cfg("s%d" % (ts//1000), ts, 8000, 4000, 32000); onoff_runs.append("s%d" % (ts//1000))
+# sig sweep {4,16}us (sense=8, nic 4-32)
+for tg in (4000, 16000):
+    onoff_cfg("g%d" % (tg//1000), 8000, tg, 4000, 32000); onoff_runs.append("g%d" % (tg//1000))
 
 print("topology: %d nodes, %d links" % (nnode, len(links)))
 print("Scenario C incast: %d senders -> host%d (single bottleneck leaf0->host0 400G)" % (len(sendersC), rcv))

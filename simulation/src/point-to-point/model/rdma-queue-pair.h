@@ -80,8 +80,9 @@ public:
 		uint32_t m_incStage;
 	}hpccPint;
 	struct{
-		bool congested;   // last commanded congestion state (on=false/off=true)
-		uint64_t gen;     // generation counter to drop stale scheduled rate applies
+		bool applied;         // currently-applied state (true=off/250Mbps, false=on/line rate)
+		bool target;          // latest received signal state
+		bool pending;         // a NIC-processing apply is in flight
 	}onoff;
 
 	/***********

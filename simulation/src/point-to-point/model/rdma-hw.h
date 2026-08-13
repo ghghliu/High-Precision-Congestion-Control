@@ -7,6 +7,7 @@
 #include <ns3/custom-header.h>
 #include "qbb-net-device.h"
 #include <unordered_map>
+#include <map>
 #include "pint.h"
 
 namespace ns3 {
@@ -153,18 +154,24 @@ public:
 
 	/**********************
 	 * On/Off CC (mode 12)
-	 * Switch marks ECN when the bottleneck egress queue exceeds a threshold.
-	 * The source reacts in a binary fashion: full line rate (on) when the
-	 * signal is "not congested", or a fixed low rate (m_minRate, e.g. 250Mbps)
-	 * (off) when congested. The reaction is delayed by configurable hardware
-	 * limits: switch sensing delay + switch->source signaling delay + a jittered
-	 * NIC processing delay, which together model the control-loop latency.
+	 * Binary rate control: full line rate (on) or a fixed low rate (m_minRate,
+	 * e.g. 250Mbps, off).
+	 *  - OFF: switch marks ECN when the egress queue exceeds a threshold; the
+	 *    receiver echoes it as CNP in the ACK (every flow is fed back).
+	 *  - ON : the switch sends a "back to sender" notification (triggered when a
+	 *    packet's queuing delay exceeds a threshold) directly to the source; its
+	 *    arrival restores full rate. Switch-side sensing period and signaling
+	 *    delay live in SwitchNode; the source adds a jittered NIC processing
+	 *    delay before the rate change actually takes effect.
 	 *********************/
-	uint64_t m_onoff_t_sense;              // switch congestion-sensing delay (ns)
-	uint64_t m_onoff_t_sig;                // switch->source signaling delay (ns)
 	uint64_t m_onoff_t_nic_min, m_onoff_t_nic_max; // NIC processing delay jitter range (ns)
-	void HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested);
-	void OnOffApply(Ptr<RdmaQueuePair> qp, DataRate rate, uint64_t gen);
+	void HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested); // OFF via ECN->CNP
+	void OnOffSignal(Ptr<RdmaQueuePair> qp, bool congested);    // latch latest on/off signal
+	void OnOffApply(Ptr<RdmaQueuePair> qp);                     // apply latest state after NIC delay
+	void OnOffBtsOn(uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel); // ON from switch BTS
+	// registry so a SwitchNode can deliver a back-to-sender ON to the source NIC
+	static std::map<uint32_t, Ptr<RdmaHw> > m_rdmaHwMap; // node id -> RdmaHw
+	static void DeliverBtsOn(uint32_t srcNodeId, uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel);
 };
 
 } /* namespace ns3 */

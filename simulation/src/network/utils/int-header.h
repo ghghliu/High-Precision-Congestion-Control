@@ -54,6 +54,12 @@ public:
 				lineRate=3;break;
 			case 400000000000lu:
 				lineRate=4;break;
+			case 800000000000lu:
+				lineRate=5;break;
+			case 1600000000000lu:
+				lineRate=6;break;
+			case 3200000000000lu:
+				lineRate=7;break;
 			default:
 				printf("Error: IntHeader unknown rate: %lu\n", _rate);
 				break;

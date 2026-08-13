@@ -69,6 +69,8 @@ double pint_prob = 1.0;
 double u_target = 0.95;
 uint32_t int_multi = 1;
 bool rate_bound = true;
+// On/Off CC (mode 12) hardware-limited control-loop delays (ns)
+uint64_t onoff_t_sense = 8000, onoff_t_sig = 8000, onoff_t_nic_min = 16000, onoff_t_nic_max = 100000;
 
 uint32_t ack_high_prio = 0;
 uint64_t link_down_time = 0;
@@ -535,6 +537,18 @@ int main(int argc, char *argv[])
 				conf >> v;
 				rate_decrease_interval = v;
 				std::cout << "RATE_DECREASE_INTERVAL\t\t" << rate_decrease_interval << "\n";
+			}else if (key.compare("ONOFF_T_SENSE") == 0){
+				conf >> onoff_t_sense;
+				std::cout << "ONOFF_T_SENSE\t\t" << onoff_t_sense << "\n";
+			}else if (key.compare("ONOFF_T_SIG") == 0){
+				conf >> onoff_t_sig;
+				std::cout << "ONOFF_T_SIG\t\t" << onoff_t_sig << "\n";
+			}else if (key.compare("ONOFF_T_NIC_MIN") == 0){
+				conf >> onoff_t_nic_min;
+				std::cout << "ONOFF_T_NIC_MIN\t\t" << onoff_t_nic_min << "\n";
+			}else if (key.compare("ONOFF_T_NIC_MAX") == 0){
+				conf >> onoff_t_nic_max;
+				std::cout << "ONOFF_T_NIC_MAX\t\t" << onoff_t_nic_max << "\n";
 			}else if (key.compare("MIN_RATE") == 0){
 				conf >> min_rate;
 				std::cout << "MIN_RATE\t\t" << min_rate << "\n";
@@ -871,6 +885,10 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("CcMode", UintegerValue(cc_mode));
 			rdmaHw->SetAttribute("RateDecreaseInterval", DoubleValue(rate_decrease_interval));
 			rdmaHw->SetAttribute("MinRate", DataRateValue(DataRate(min_rate)));
+			rdmaHw->SetAttribute("OnOffTSense", UintegerValue(onoff_t_sense));
+			rdmaHw->SetAttribute("OnOffTSig", UintegerValue(onoff_t_sig));
+			rdmaHw->SetAttribute("OnOffTNicMin", UintegerValue(onoff_t_nic_min));
+			rdmaHw->SetAttribute("OnOffTNicMax", UintegerValue(onoff_t_nic_max));
 			rdmaHw->SetAttribute("Mtu", UintegerValue(packet_payload_size));
 			rdmaHw->SetAttribute("MiThresh", UintegerValue(mi_thresh));
 			rdmaHw->SetAttribute("VarWin", BooleanValue(var_win));

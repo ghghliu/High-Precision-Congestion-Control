@@ -150,6 +150,21 @@ public:
 	void SetPintSmplThresh(double p);
 	void HandleAckHpPint(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch);
 	void UpdateRateHpPint(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch, bool fast_react);
+
+	/**********************
+	 * On/Off CC (mode 12)
+	 * Switch marks ECN when the bottleneck egress queue exceeds a threshold.
+	 * The source reacts in a binary fashion: full line rate (on) when the
+	 * signal is "not congested", or a fixed low rate (m_minRate, e.g. 250Mbps)
+	 * (off) when congested. The reaction is delayed by configurable hardware
+	 * limits: switch sensing delay + switch->source signaling delay + a jittered
+	 * NIC processing delay, which together model the control-loop latency.
+	 *********************/
+	uint64_t m_onoff_t_sense;              // switch congestion-sensing delay (ns)
+	uint64_t m_onoff_t_sig;                // switch->source signaling delay (ns)
+	uint64_t m_onoff_t_nic_min, m_onoff_t_nic_max; // NIC processing delay jitter range (ns)
+	void HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested);
+	void OnOffApply(Ptr<RdmaQueuePair> qp, DataRate rate, uint64_t gen);
 };
 
 } /* namespace ns3 */

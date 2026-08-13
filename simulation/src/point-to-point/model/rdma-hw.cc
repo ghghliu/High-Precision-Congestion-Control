@@ -24,6 +24,26 @@ TypeId RdmaHw::GetTypeId (void)
 				DataRateValue(DataRate("100Mb/s")),
 				MakeDataRateAccessor(&RdmaHw::m_minRate),
 				MakeDataRateChecker())
+		.AddAttribute("OnOffTSense",
+				"On/Off CC: switch congestion-sensing delay (ns)",
+				UintegerValue(8000),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_t_sense),
+				MakeUintegerChecker<uint64_t>())
+		.AddAttribute("OnOffTSig",
+				"On/Off CC: switch->source signaling delay (ns)",
+				UintegerValue(8000),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_t_sig),
+				MakeUintegerChecker<uint64_t>())
+		.AddAttribute("OnOffTNicMin",
+				"On/Off CC: minimum NIC processing delay (ns)",
+				UintegerValue(16000),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_t_nic_min),
+				MakeUintegerChecker<uint64_t>())
+		.AddAttribute("OnOffTNicMax",
+				"On/Off CC: maximum NIC processing delay (ns)",
+				UintegerValue(100000),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_t_nic_max),
+				MakeUintegerChecker<uint64_t>())
 		.AddAttribute("Mtu",
 				"Mtu.",
 				UintegerValue(1000),
@@ -251,6 +271,9 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 		qp->tmly.m_curRate = m_bps;
 	}else if (m_cc_mode == 10){
 		qp->hpccPint.m_curRate = m_bps;
+	}else if (m_cc_mode == 12){
+		qp->onoff.congested = false; // start "on" at full line rate
+		qp->onoff.gen = 0;
 	}
 
 	// Notify Nic
@@ -431,6 +454,8 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch){
 		HandleAckDctcp(qp, p, ch);
 	}else if (m_cc_mode == 10){
 		HandleAckHpPint(qp, p, ch);
+	}else if (m_cc_mode == 12){
+		HandleAckOnOff(qp, cnp != 0);
 	}
 	// ACK may advance the on-the-fly window, allowing more packets to send
 	dev->TriggerTransmit();
@@ -609,6 +634,32 @@ void RdmaHw::ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate){
 
 	// change to new rate
 	qp->m_rate = new_rate;
+}
+
+/******************************
+ * On/Off CC (mode 12)
+ *****************************/
+void RdmaHw::HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested){
+	// Only react on a change of the (binary) congestion signal.
+	if (congested == qp->onoff.congested)
+		return;
+	qp->onoff.congested = congested;
+	uint64_t gen = ++qp->onoff.gen;
+	DataRate target = congested ? m_minRate : qp->m_max_rate; // off=250Mbps / on=line rate
+	// Hardware-limited control-loop delay:
+	//   switch sensing + switch->source signaling + jittered NIC processing.
+	uint64_t nic = m_onoff_t_nic_min;
+	if (m_onoff_t_nic_max > m_onoff_t_nic_min)
+		nic += (uint64_t)((double)rand() / RAND_MAX * (m_onoff_t_nic_max - m_onoff_t_nic_min));
+	uint64_t delay = m_onoff_t_sense + m_onoff_t_sig + nic;
+	Simulator::Schedule(NanoSeconds(delay), &RdmaHw::OnOffApply, this, qp, target, gen);
+}
+
+void RdmaHw::OnOffApply(Ptr<RdmaQueuePair> qp, DataRate rate, uint64_t gen){
+	// Drop stale applies that a newer signal transition has superseded.
+	if (gen != qp->onoff.gen)
+		return;
+	ChangeRate(qp, rate);
 }
 
 #define PRINT_LOG 0

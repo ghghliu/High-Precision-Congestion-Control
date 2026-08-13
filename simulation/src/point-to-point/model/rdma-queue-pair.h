@@ -79,6 +79,10 @@ public:
 		DataRate m_curRate;
 		uint32_t m_incStage;
 	}hpccPint;
+	struct{
+		bool congested;   // last commanded congestion state (on=false/off=true)
+		uint64_t gen;     // generation counter to drop stale scheduled rate applies
+	}onoff;
 
 	/***********
 	 * methods

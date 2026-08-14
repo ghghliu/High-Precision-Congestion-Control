@@ -294,7 +294,7 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
 		m_bytes[inDev][ifIndex][qIndex] -= p->GetSize();
 		if (m_ecnEnabled){
 			uint8_t ecn = 0;
-			if (m_ccMode == 13){ // dual-watermark on/off: 01 in [Klow,Khigh), 11 above Khigh
+			if (m_ccMode == 13 || m_ccMode == 14){ // dual-watermark: 01 in [Klow,Khigh), 11 above Khigh
 				uint32_t lvl = m_mmu->EcnLevel(ifIndex, qIndex);
 				ecn = (lvl == 2) ? 0x03 : (lvl == 1 ? 0x01 : 0);
 			}else if (m_mmu->ShouldSendCN(ifIndex, qIndex)){

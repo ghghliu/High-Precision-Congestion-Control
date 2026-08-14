@@ -49,6 +49,26 @@ TypeId RdmaHw::GetTypeId (void)
 				UintegerValue(1),
 				MakeUintegerAccessor(&RdmaHw::m_onoff_on_confirm),
 				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("MlLightPct",
+				"Multi-level (mode14): light decrease multiplier on 01, as percent (e.g. 50 = x0.5)",
+				UintegerValue(50),
+				MakeUintegerAccessor(&RdmaHw::m_ml_light_pct),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("MlResumePct",
+				"Multi-level (mode14): fast-recovery floor on first unmarked, as percent of line rate",
+				UintegerValue(50),
+				MakeUintegerAccessor(&RdmaHw::m_ml_resume_pct),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("MlProbePct",
+				"Multi-level (mode14): additive probe step while uncongested, as percent of line rate",
+				UintegerValue(25),
+				MakeUintegerAccessor(&RdmaHw::m_ml_probe_pct),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("MlProbeInterval",
+				"Multi-level (mode14): ns between probe steps",
+				UintegerValue(40000),
+				MakeUintegerAccessor(&RdmaHw::m_ml_probe_intvl),
+				MakeUintegerChecker<uint64_t>())
 		.AddAttribute("Mtu",
 				"Mtu.",
 				UintegerValue(1000),
@@ -276,10 +296,11 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 		qp->tmly.m_curRate = m_bps;
 	}else if (m_cc_mode == 10){
 		qp->hpccPint.m_curRate = m_bps;
-	}else if (m_cc_mode == 12 || m_cc_mode == 13){
+	}else if (m_cc_mode == 12 || m_cc_mode == 13 || m_cc_mode == 14){
 		// per-DIP control: register this QP under its destination and start "on"
 		m_onoffQps[dip.Get()].push_back(qp);
-		m_onoffCtx[dip.Get()]; // create default ctx if absent (applied=on)
+		OnOffCtx &c = m_onoffCtx[dip.Get()]; // create default ctx if absent (applied=on)
+		c.tgtRate = c.appRate = m_bps;       // mode 14 starts at line rate
 	}
 
 	// Notify Nic
@@ -347,7 +368,7 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch){
 		seqh.SetSport(ch.udp.dport);
 		seqh.SetDport(ch.udp.sport);
 		seqh.SetIntHeader(ch.udp.ih);
-		if (m_cc_mode == 13){ // dual-watermark: reflect high (CE/11) and low (ECT1/01) separately
+		if (m_cc_mode == 13 || m_cc_mode == 14){ // dual-watermark: reflect high (CE/11) and low (ECT1/01)
 			if (ecnbits == 0x03)
 				seqh.SetCnp();
 			else if (ecnbits == 0x01)
@@ -471,6 +492,9 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch){
 	}else if (m_cc_mode == 13){
 		uint8_t ecnlow = (ch.ack.flags >> qbbHeader::FLAG_ECNLOW) & 1;
 		HandleAckDualEcn(qp, cnp != 0, ecnlow != 0);
+	}else if (m_cc_mode == 14){
+		uint8_t ecnlow = (ch.ack.flags >> qbbHeader::FLAG_ECNLOW) & 1;
+		HandleAckMultiLevel(qp, cnp != 0, ecnlow != 0);
 	}
 	// ACK may advance the on-the-fly window, allowing more packets to send
 	dev->TriggerTransmit();
@@ -693,6 +717,70 @@ void RdmaHw::HandleAckDualEcn(Ptr<RdmaQueuePair> qp, bool high, bool low){
 		if (++c.unmarked >= m_onoff_on_confirm)
 			OnOffSignal(dip, false);
 	}
+}
+
+// Multi-level rate control (mode 14) on the dual-watermark ACK path:
+//   high (11, q>Khigh)    -> heavy decrease to R_min (250Mbps): guarantees drain for any N
+//   low  (01, Klow<=q<Kh) -> light multiplicative decrease R <- R * MlLightPct/100
+//   none (unmarked, q<Klow) -> fast-recover to MlResumePct% of line (default 50%); once there,
+//                              additively probe up by MlProbePct% every MlProbeInterval while clean.
+void RdmaHw::HandleAckMultiLevel(Ptr<RdmaQueuePair> qp, bool high, bool low){
+	uint32_t dip = qp->dip.Get();
+	OnOffCtx &c = m_onoffCtx[dip];
+	std::vector<Ptr<RdmaQueuePair> > &qps = m_onoffQps[dip];
+	DataRate line = qps.empty() ? m_minRate : qps[0]->m_max_rate;
+	if (high){
+		if (c.probe.IsRunning()) Simulator::Cancel(c.probe);
+		OnOffSetRate(dip, m_minRate);
+	}else if (low){
+		if (c.probe.IsRunning()) Simulator::Cancel(c.probe);
+		uint64_t nr = c.tgtRate.GetBitRate() * m_ml_light_pct / 100;
+		if (nr < m_minRate.GetBitRate()) nr = m_minRate.GetBitRate();
+		OnOffSetRate(dip, DataRate(nr));
+	}else{ // unmarked: queue < Klow
+		uint64_t floor = line.GetBitRate() * m_ml_resume_pct / 100;
+		if (c.tgtRate.GetBitRate() < floor){
+			OnOffSetRate(dip, DataRate(floor)); // fast recovery to the safe floor
+		}else if (c.tgtRate.GetBitRate() < line.GetBitRate() && !c.probe.IsRunning()){
+			c.probe = Simulator::Schedule(NanoSeconds(m_ml_probe_intvl), &RdmaHw::OnOffProbe, this, dip);
+		}
+	}
+}
+
+void RdmaHw::OnOffProbe(uint32_t dip){
+	OnOffCtx &c = m_onoffCtx[dip];
+	std::vector<Ptr<RdmaQueuePair> > &qps = m_onoffQps[dip];
+	if (qps.empty()) return;
+	DataRate line = qps[0]->m_max_rate;
+	uint64_t step = line.GetBitRate() * m_ml_probe_pct / 100;
+	uint64_t nr = c.tgtRate.GetBitRate() + step;
+	if (nr > line.GetBitRate()) nr = line.GetBitRate();
+	OnOffSetRate(dip, DataRate(nr));
+	if (nr < line.GetBitRate()) // keep probing upward while uncongested
+		c.probe = Simulator::Schedule(NanoSeconds(m_ml_probe_intvl), &RdmaHw::OnOffProbe, this, dip);
+}
+
+void RdmaHw::OnOffSetRate(uint32_t dip, DataRate rate){
+	OnOffCtx &c = m_onoffCtx[dip];
+	c.tgtRate = rate;
+	if (!c.ratePending && c.tgtRate.GetBitRate() != c.appRate.GetBitRate()){
+		c.ratePending = true;
+		uint64_t nic = m_onoff_t_nic_min;
+		if (m_onoff_t_nic_max > m_onoff_t_nic_min)
+			nic += (uint64_t)((double)rand() / RAND_MAX * (m_onoff_t_nic_max - m_onoff_t_nic_min));
+		Simulator::Schedule(NanoSeconds(nic), &RdmaHw::OnOffApplyRate, this, dip);
+	}
+}
+
+void RdmaHw::OnOffApplyRate(uint32_t dip){
+	OnOffCtx &c = m_onoffCtx[dip];
+	c.ratePending = false;
+	if (c.tgtRate.GetBitRate() == c.appRate.GetBitRate())
+		return;
+	c.appRate = c.tgtRate;
+	std::vector<Ptr<RdmaQueuePair> > &qps = m_onoffQps[dip];
+	for (uint32_t i = 0; i < qps.size(); i++)
+		ChangeRate(qps[i], c.appRate);
 }
 
 // ON path: a SwitchNode delivers a rate-limited back-to-sender notification

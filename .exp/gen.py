@@ -112,6 +112,10 @@ ONOFF_OFF_TIMEOUT {off_timeout}
 ONOFF_BTS_RESUME_LEVEL {resume_level}
 ONOFF_BTS_RECENT_WINDOW {recent_window}
 ONOFF_ON_CONFIRM {on_confirm}
+ML_LIGHT_PCT {ml_light}
+ML_RESUME_PCT {ml_resume}
+ML_PROBE_PCT {ml_probe}
+ML_PROBE_INTERVAL {ml_probe_intvl}
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 4000
 L2_ACK_INTERVAL 1
@@ -145,6 +149,7 @@ def write_cfg(name, **kw):
              t_sense=0, t_sig=0, t_nic_min=0, t_nic_max=0,
              bts_thresh=5000, bts_unit=30000, on_level=4, off_timeout=128000,
              resume_level=2, recent_window=40000, on_confirm=1,
+             ml_light=50, ml_resume=50, ml_probe=25, ml_probe_intvl=40000,
              kmax=KMAX_STD, kmin=KMIN_STD, pmax=PMAX_STD, name=name)
     d.update(kw)
     with open("%s/config_%s.txt" % (HROOT, name), "w") as f:
@@ -242,8 +247,52 @@ dualecn_cfg("l50_h200_noto", 50, 200, 4000, 32000, off_timeout=0); de_runs.appen
 dualecn_cfg("nic4",   50, 200, 4000, 4000);   de_runs.append("nic4")
 dualecn_cfg("nic100", 50, 200, 4000, 100000); de_runs.append("nic100")
 
+# ---- Incast-degree scenarios (validate 50%-resume theory) + multi-level (mode 14) ----
+# N senders spread across leaves 1..3 -> host0 (single bottleneck leaf0->host0).
+def make_incast(N):
+    pool = [host_of_leaf(1,k) for k in range(16)] + [host_of_leaf(2,k) for k in range(16)] + [host_of_leaf(3,k) for k in range(16)]
+    snd = pool[:N]
+    with open(HROOT + "/inc%d_flow.txt" % N, "w") as f:
+        f.write("%d\n" % len(snd))
+        for s in snd:
+            f.write("%d %d 3 100 %d %.9f\n" % (s, rcv, 200000000, 2.000))
+    open(HROOT + "/inc%d_trace.txt" % N, "w").write("1\n64\n")
+
+KMIN_DE = "2 400000000000 50 3200000000000 50"    # Klow=50KB
+KMAX_DE = "2 400000000000 200 3200000000000 200"  # Khigh=200KB
+
+def scheme_cfg(name, N, scheme, **extra):
+    flow="inc%d_flow.txt"%N; trace="inc%d_trace.txt"%N
+    base=dict(flow=flow, trace=trace, stop=2.010, tr=1)
+    if scheme=="dcqcn":
+        base.update(qcn=1, mode=1, ai=5*BW//25, hai=50*BW//25, has_win=0, vwin=0, fr=0, ack=1, int_multi=1)
+    elif scheme=="hpcc":
+        base.update(qcn=1, mode=3, ai=10*BW//25, hai=10*BW//25, has_win=1, vwin=1, fr=1, ack=0, int_multi=1)
+    elif scheme=="de":   # dual-ECN binary (mode 13)
+        base.update(qcn=1, mode=13, ai=0, hai=0, has_win=0, vwin=0, fr=0, ack=1, int_multi=1,
+                    min_rate="250Mb/s", kmax=KMAX_DE, kmin=KMIN_DE, pmax=PMAX_ON,
+                    t_nic_min=4000, t_nic_max=32000, off_timeout=460000)
+    elif scheme=="ml":   # multi-level (mode 14)
+        base.update(qcn=1, mode=14, ai=0, hai=0, has_win=0, vwin=0, fr=0, ack=1, int_multi=1,
+                    min_rate="250Mb/s", kmax=KMAX_DE, kmin=KMIN_DE, pmax=PMAX_ON,
+                    t_nic_min=4000, t_nic_max=32000, off_timeout=460000)
+    base.update(extra)
+    write_cfg(name, **base)
+
+inc_runs=[]
+for N in (2, 8, 32):
+    make_incast(N)
+    for sch in ("dcqcn","hpcc","de","ml"):
+        nm="%s_N%d"%(sch,N); scheme_cfg(nm,N,sch); inc_runs.append(nm)
+# mode-14 param sweep on N=8: light decrease factor, resume floor, probe step
+scheme_cfg("ml_l75_N8", 8, "ml", ml_light=75); inc_runs.append("ml_l75_N8")
+scheme_cfg("ml_l25_N8", 8, "ml", ml_light=25); inc_runs.append("ml_l25_N8")
+scheme_cfg("ml_r25_N8", 8, "ml", ml_resume=25); inc_runs.append("ml_r25_N8")
+scheme_cfg("ml_r100_N8", 8, "ml", ml_resume=100); inc_runs.append("ml_r100_N8")  # resume straight to 100%
+scheme_cfg("ml_p50_N8", 8, "ml", ml_probe=50); inc_runs.append("ml_p50_N8")
 print("topology: %d nodes, %d links" % (nnode, len(links)))
 print("dual-ECN(mode13) configs: %s" % ", ".join("de_%s_C" % r for r in de_runs))
+print("incast comparison configs: %s" % ", ".join(inc_runs))
 print("Scenario C incast: %d senders -> host%d (single bottleneck leaf0->host0 400G)" % (len(sendersC), rcv))
 print("baseline configs: %s on A,B,C" % ",".join(presets))
 print("on/off configs: %s" % ", ".join("onoff_%s_C" % r for r in onoff_runs))

@@ -75,6 +75,7 @@ uint64_t onoff_bts_delay_thresh = 5000, onoff_bts_level_unit = 30000;
 uint32_t onoff_on_level = 4; uint64_t onoff_off_timeout = 128000;
 uint32_t onoff_bts_resume_level = 2; uint64_t onoff_bts_recent_window = 40000;
 uint32_t onoff_on_confirm = 1;
+uint32_t ml_light_pct = 50, ml_resume_pct = 50, ml_probe_pct = 25; uint64_t ml_probe_intvl = 40000;
 
 uint32_t ack_high_prio = 0;
 uint64_t link_down_time = 0;
@@ -574,6 +575,18 @@ int main(int argc, char *argv[])
 			}else if (key.compare("ONOFF_ON_CONFIRM") == 0){
 				conf >> onoff_on_confirm;
 				std::cout << "ONOFF_ON_CONFIRM\t\t" << onoff_on_confirm << "\n";
+			}else if (key.compare("ML_LIGHT_PCT") == 0){
+				conf >> ml_light_pct;
+				std::cout << "ML_LIGHT_PCT\t\t" << ml_light_pct << "\n";
+			}else if (key.compare("ML_RESUME_PCT") == 0){
+				conf >> ml_resume_pct;
+				std::cout << "ML_RESUME_PCT\t\t" << ml_resume_pct << "\n";
+			}else if (key.compare("ML_PROBE_PCT") == 0){
+				conf >> ml_probe_pct;
+				std::cout << "ML_PROBE_PCT\t\t" << ml_probe_pct << "\n";
+			}else if (key.compare("ML_PROBE_INTERVAL") == 0){
+				conf >> ml_probe_intvl;
+				std::cout << "ML_PROBE_INTERVAL\t\t" << ml_probe_intvl << "\n";
 			}else if (key.compare("MIN_RATE") == 0){
 				conf >> min_rate;
 				std::cout << "MIN_RATE\t\t" << min_rate << "\n";
@@ -915,6 +928,10 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("OnOffOnLevel", UintegerValue(onoff_on_level));
 			rdmaHw->SetAttribute("OnOffOffTimeout", UintegerValue(onoff_off_timeout));
 			rdmaHw->SetAttribute("OnOffOnConfirm", UintegerValue(onoff_on_confirm));
+			rdmaHw->SetAttribute("MlLightPct", UintegerValue(ml_light_pct));
+			rdmaHw->SetAttribute("MlResumePct", UintegerValue(ml_resume_pct));
+			rdmaHw->SetAttribute("MlProbePct", UintegerValue(ml_probe_pct));
+			rdmaHw->SetAttribute("MlProbeInterval", UintegerValue(ml_probe_intvl));
 			rdmaHw->SetAttribute("Mtu", UintegerValue(packet_payload_size));
 			rdmaHw->SetAttribute("MiThresh", UintegerValue(mi_thresh));
 			rdmaHw->SetAttribute("VarWin", BooleanValue(var_win));

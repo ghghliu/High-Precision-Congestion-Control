@@ -63,7 +63,7 @@ See `docs/probe_results_400g.md`.
 
 ## Expected signatures
 
-- **PFC:** high dest utilization, many pause events; **outcast victim on the incast source NIC falls to ~1/N**.
-- **DCQCN:** victim stays near line rate (no NIC pause), but incast aggregate goodput ≪ 400G (AI=80Mb/s, RP_TIMER=300µs).
-- **HPCC:** INT window, little/no PFC, faster recovery than DCQCN.
-- **TIMELY:** delay-based; typically avoids host-0 pause but can still under-utilize vs HPCC.
+- **PFC:** high dest utilization, many pause events; **outcast victim on the incast source NIC falls to ~1/N**. Probe mice wait a ~250µs pause floor (32k slowdown 28×) and amortize toward ~54G on 20MB.
+- **DCQCN:** victim stays near line rate (no NIC pause), but incast aggregate goodput ≪ 400G (AI=80Mb/s, RP_TIMER=300µs). A mouse joining that incast: no `mlx_dec` if it finishes before the first CNP (~37µs / ≲400KB); 1–2MB die during MD at 1–8G; 5–20MB recover after FR at ~449µs (slowdown saturates ~5.6×).
+- **HPCC:** INT window, little/no PFC, faster recovery than DCQCN. Probe cut starts at one RTT (+8µs) but 32k is already done (slowdown 1.07).
+- **TIMELY:** delay-based; typically avoids host-0 pause but can still under-utilize vs HPCC. Small probes look PFC-like; 20MB stays near 240G.

@@ -250,6 +250,7 @@ def main() -> None:
     ap.add_argument("--ccs", default="pfc,dcqcn,hp,timely")
     ap.add_argument("--out-md", default="")
     ap.add_argument("--out-svg", default="")
+    ap.add_argument("--out-svg-cc", default="")
     args = ap.parse_args()
     ccs = [c.strip() for c in args.ccs.split(",") if c.strip()]
     fair_g = 400.0 / 9.0  # 8 incast + 1 probe
@@ -328,6 +329,11 @@ def main() -> None:
     if args.out_svg:
         write_slowdown_svg(args.out_svg, rows_out, ccs)
         print("wrote %s" % args.out_svg)
+    if args.out_svg_cc:
+        cc_only = [c for c in ccs if c != "pfc"]
+        cc_rows = [x for x in rows_out if x[2] in cc_only]
+        write_slowdown_svg(args.out_svg_cc, cc_rows, cc_only)
+        print("wrote %s" % args.out_svg_cc)
 
 
 if __name__ == "__main__":

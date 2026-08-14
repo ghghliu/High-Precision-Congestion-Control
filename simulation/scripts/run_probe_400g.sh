@@ -52,7 +52,8 @@ done
 
 python3 ../analysis/analyze_probe.py --mix mix --ccs pfc,dcqcn,hp,timely \
   --out-md ../docs/probe_table_400g.md \
-  --out-svg ../docs/probe_slowdown_400g.svg
+  --out-svg ../docs/probe_slowdown_400g.svg \
+  --out-svg-cc ../docs/probe_slowdown_cc_400g.svg
 if [ "$fail" != 0 ]; then
   echo "one or more sims failed" >&2
   exit 1

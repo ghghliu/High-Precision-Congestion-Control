@@ -177,23 +177,32 @@ def onoff_cfg(name, t_sense, t_sig, t_nic_min, t_nic_max, on_level=4, off_timeou
               on_level=on_level, off_timeout=off_timeout)
 
 onoff_runs = []
-onoff_cfg("ideal", 1000, 0, 0, 0); onoff_runs.append("ideal")   # minimal hardware delay
-# 3 NIC cases at sense=8us, sig=8us (level-gated ON, 128us OFF timeout)
-onoff_cfg("nic4",    8000, 8000, 4000, 4000);   onoff_runs.append("nic4")    # fixed 4us
-onoff_cfg("nic4_32", 8000, 8000, 4000, 32000);  onoff_runs.append("nic4_32") # 4-32us
-onoff_cfg("nic4_100",8000, 8000, 4000, 100000); onoff_runs.append("nic4_100")# 4-100us
-# sense sweep {1,4,16}us (sig=8, nic 4-32)
-for ts in (1000, 4000, 16000):
-    onoff_cfg("s%d" % (ts//1000), ts, 8000, 4000, 32000); onoff_runs.append("s%d" % (ts//1000))
-# sig sweep {4,16}us (sense=8, nic 4-32)
-for tg in (4000, 16000):
-    onoff_cfg("g%d" % (tg//1000), 8000, tg, 4000, 32000); onoff_runs.append("g%d" % (tg//1000))
-# OFF-timeout sweep {64,128,460}us (nic 4-32, sense8, sig8); 128 == nic4_32
-onoff_cfg("to64",  8000, 8000, 4000, 32000, off_timeout=64000);  onoff_runs.append("to64")
-onoff_cfg("to460", 8000, 8000, 4000, 32000, off_timeout=460000); onoff_runs.append("to460")
-# ON-level threshold sweep {2,8} (nic 4-32)
-onoff_cfg("lvl2", 8000, 8000, 4000, 32000, on_level=2); onoff_runs.append("lvl2")
-onoff_cfg("lvl8", 8000, 8000, 4000, 32000, on_level=8); onoff_runs.append("lvl8")
+# Context: default-tuned cases (on_level=4, off_timeout=128us) across the 3 NIC cases.
+onoff_cfg("nic4",    8000, 8000, 4000, 4000);   onoff_runs.append("nic4")
+onoff_cfg("nic4_32", 8000, 8000, 4000, 32000);  onoff_runs.append("nic4_32")
+onoff_cfg("nic4_100",8000, 8000, 4000, 100000); onoff_runs.append("nic4_100")
+
+# ---- Anti-under-throughput exploration of the CONTROLLABLE params ----
+# util is driven up by: short OFF-timeout, higher ON-level threshold, fresh sense.
+# Grid over off_timeout x on_level (sense=4us, sig=8us, NIC=4-32us).
+for T in (16000, 32000, 64000):
+    for L in (8, 16):
+        nm = "hu_t%d_l%d" % (T//1000, L)
+        onoff_cfg(nm, 4000, 8000, 4000, 32000, on_level=L, off_timeout=T); onoff_runs.append(nm)
+# Robustness of an aggressive high-util setting (T=32us, L=16, sense=1us) across NIC cases.
+onoff_cfg("hu_best_nic4",   1000, 8000, 4000, 4000,   on_level=16, off_timeout=32000); onoff_runs.append("hu_best_nic4")
+onoff_cfg("hu_best_nic32",  1000, 8000, 4000, 32000,  on_level=16, off_timeout=32000); onoff_runs.append("hu_best_nic32")
+onoff_cfg("hu_best_nic100", 1000, 8000, 4000, 100000, on_level=16, off_timeout=32000); onoff_runs.append("hu_best_nic100")
+# PFC-free high-util candidate (L<8, off_timeout=64us): robustness across NIC + timeout knee
+onoff_cfg("pf_nic4",   4000, 8000, 4000, 4000,   on_level=8, off_timeout=64000); onoff_runs.append("pf_nic4")
+onoff_cfg("pf_nic100", 4000, 8000, 4000, 100000, on_level=8, off_timeout=64000); onoff_runs.append("pf_nic100")
+onoff_cfg("pf_t48", 4000, 8000, 4000, 32000, on_level=8, off_timeout=48000); onoff_runs.append("pf_t48")
+onoff_cfg("pf_t80", 4000, 8000, 4000, 32000, on_level=8, off_timeout=80000); onoff_runs.append("pf_t80")
+onoff_cfg("pf_t96", 4000, 8000, 4000, 32000, on_level=8, off_timeout=96000); onoff_runs.append("pf_t96")
+# fast-NIC (4us) is hardest to keep utilized: does a shorter timeout recover util w/o PFC?
+onoff_cfg("pf2_nic4_t32", 4000, 8000, 4000, 4000, on_level=8, off_timeout=32000); onoff_runs.append("pf2_nic4_t32")
+onoff_cfg("pf2_nic4_t16", 4000, 8000, 4000, 4000, on_level=8, off_timeout=16000); onoff_runs.append("pf2_nic4_t16")
+onoff_cfg("pf2_nic4_t8",  4000, 8000, 4000, 4000, on_level=8, off_timeout=8000);  onoff_runs.append("pf2_nic4_t8")
 
 print("topology: %d nodes, %d links" % (nnode, len(links)))
 print("Scenario C incast: %d senders -> host%d (single bottleneck leaf0->host0 400G)" % (len(sendersC), rcv))

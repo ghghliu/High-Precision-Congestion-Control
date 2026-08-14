@@ -46,19 +46,27 @@ def npfc(name):
     return n
 
 baselines = [("pfc_C","PFC-only"),("dcqcn_C","DCQCN"),("hpcc_C","HPCC"),("timely_C","TIMELY")]
-onoff = [("onoff_ideal_C","on/off ideal(min HW delay)"),
-         ("onoff_nic4_C","on/off nic=4us"),
-         ("onoff_nic4_32_C","on/off nic=4-32us"),
-         ("onoff_nic4_100_C","on/off nic=4-100us"),
-         ("onoff_s1_C","on/off sense=1us"),
-         ("onoff_s4_C","on/off sense=4us"),
-         ("onoff_s16_C","on/off sense=16us"),
-         ("onoff_g4_C","on/off sig=4us"),
-         ("onoff_g16_C","on/off sig=16us"),
-         ("onoff_to64_C","on/off off-timeout=64us"),
-         ("onoff_to460_C","on/off off-timeout=460us"),
-         ("onoff_lvl2_C","on/off on-level<2"),
-         ("onoff_lvl8_C","on/off on-level<8")]
+onoff = [("onoff_nic4_C","default nic=4us (L4,to128)"),
+         ("onoff_nic4_32_C","default nic=4-32us (L4,to128)"),
+         ("onoff_nic4_100_C","default nic=4-100us (L4,to128)"),
+         ("onoff_hu_t16_l8_C","to=16us L<8 (nic4-32)"),
+         ("onoff_hu_t32_l8_C","to=32us L<8 (nic4-32)"),
+         ("onoff_hu_t64_l8_C","to=64us L<8 (nic4-32)"),
+         ("onoff_hu_t16_l16_C","to=16us L<16 (nic4-32)"),
+         ("onoff_hu_t32_l16_C","to=32us L<16 (nic4-32)"),
+         ("onoff_hu_t64_l16_C","to=64us L<16 (nic4-32)"),
+         ("onoff_hu_best_nic4_C","best(to32,L16,s1) nic=4us"),
+         ("onoff_hu_best_nic32_C","best(to32,L16,s1) nic=4-32us"),
+         ("onoff_hu_best_nic100_C","best(to32,L16,s1) nic=4-100us"),
+         ("onoff_pf_nic4_C","PFC-free L<8,to64 nic=4us"),
+         ("onoff_hu_t64_l8_C","PFC-free L<8,to64 nic=4-32us"),
+         ("onoff_pf_nic100_C","PFC-free L<8,to64 nic=4-100us"),
+         ("onoff_pf_t48_C","L<8 to=48us (nic4-32)"),
+         ("onoff_pf_t80_C","L<8 to=80us (nic4-32)"),
+         ("onoff_pf_t96_C","L<8 to=96us (nic4-32)"),
+         ("onoff_pf2_nic4_t32_C","nic=4us L<8 to=32us"),
+         ("onoff_pf2_nic4_t16_C","nic=4us L<8 to=16us"),
+         ("onoff_pf2_nic4_t8_C","nic=4us L<8 to=8us")]
 
 def rowstr(name, lab):
     return "%-26s %8.1f %11.0f %11.0f %11.1f %11.1f %10d" % (
@@ -75,8 +83,9 @@ txt = "\n".join(L); print(txt)
 open(ART+"/onoff_aligned_results.txt","w").write(txt+"\n")
 
 # --- plot: bar charts of the 6 metrics for baselines + 3 nic cases ---
-sel = [("pfc_C","PFC"),("dcqcn_C","DCQCN"),("hpcc_C","HPCC"),("timely_C","TIMELY"),
-       ("onoff_ideal_C","o/o ideal"),("onoff_nic4_C","o/o nic4"),("onoff_nic4_32_C","o/o nic4-32"),("onoff_nic4_100_C","o/o nic4-100")]
+sel = [("dcqcn_C","DCQCN"),("hpcc_C","HPCC"),("timely_C","TIMELY"),
+       ("onoff_nic4_32_C","o/o default"),("onoff_hu_t64_l16_C","o/o to64,L16"),
+       ("onoff_hu_best_nic4_C","o/o best nic4"),("onoff_hu_best_nic32_C","o/o best nic4-32"),("onoff_hu_best_nic100_C","o/o best nic4-100")]
 labels = [l for _,l in sel]
 import numpy as np
 x = np.arange(len(sel))
@@ -101,8 +110,8 @@ def tser(name):
     d = T.get(name, {}); return [i*0.2 for i in range(50)], [d.get(i,0)*8/200e-6/1e9 for i in range(50)]
 def qser(name):
     d = Q.get(name, {}); return [i*0.01 for i in range(1000)], [d.get(i,0)/1000.0 for i in range(1000)]
-ts_sel = [("hpcc_C","HPCC"),("dcqcn_C","DCQCN"),("onoff_nic4_C","on/off nic=4us"),
-          ("onoff_nic4_100_C","on/off nic=4-100us"),("onoff_to64_C","on/off off-timeout=64us")]
+ts_sel = [("hpcc_C","HPCC"),("dcqcn_C","DCQCN"),("onoff_nic4_32_C","on/off default(to128,L4)"),
+          ("onoff_hu_best_nic32_C","on/off high-util(to32,L16,s1)"),("onoff_hu_best_nic100_C","on/off high-util nic4-100")]
 fig3, (c1, c2) = plt.subplots(1, 2, figsize=(15, 5.5))
 for name, lab in ts_sel:
     x,y = tser(name); c1.plot(x, y, lw=1.3, label=lab)
@@ -114,3 +123,26 @@ c2.set_title("Bottleneck queue length"); c2.set_xlabel("time (ms)"); c2.set_ylab
 c2.set_yscale("symlog"); c2.grid(alpha=0.3); c2.legend(fontsize=8)
 fig3.suptitle("On/off (corrected): 0 PFC, bounded queue; util vs queue tradeoff via HW delays / timeout", fontsize=12)
 fig3.tight_layout(); fig3.savefig(ART+"/onoff_aligned_timeseries.png", dpi=110); print("saved onoff_aligned_timeseries.png")
+
+# --- Pareto: utilization vs p99 latency; red=triggers PFC, green=PFC-free ---
+fig4, ax = plt.subplots(figsize=(11, 6.5))
+pts = [n for n,_ in onoff]
+for n in pts:
+    u = util(n)*100; y = max(p99_lat(n), 0.5); pfc = npfc(n)
+    ax.scatter(u, y, s=70, c=("#C44E52" if pfc>0 else "#55A868"), edgecolors="k", linewidths=0.4, zorder=3)
+# highlight the recommended PFC-free operating point and defaults
+notes = {"onoff_hu_t64_l8_C":"L<8,to64 (nic4-32)\n97% 0PFC",
+         "onoff_pf_nic100_C":"L<8,to64 (nic4-100)\n98% 0PFC",
+         "onoff_pf_nic4_C":"L<8,to64 (nic4)\n77%",
+         "onoff_pf2_nic4_t8_C":"nic4,to8\n87% 0PFC",
+         "onoff_nic4_C":"default nic4\n42% (under)",
+         "onoff_hu_t32_l16_C":"aggressive\n100% but PFC"}
+for n,txt in notes.items():
+    ax.annotate(txt, (util(n)*100, max(p99_lat(n),0.5)), fontsize=7, xytext=(5,4), textcoords="offset points")
+for n,l,c in [("hpcc_C","HPCC","#4C72B0"),("dcqcn_C","DCQCN","#8172B2"),("timely_C","TIMELY","#CCB974")]:
+    ax.scatter(util(n)*100, max(p99_lat(n),0.5), s=120, marker="*", c=c, edgecolors="k", zorder=4, label=l)
+ax.set_yscale("log"); ax.set_xlabel("utilization (%)  ->  higher = less under-throughput")
+ax.set_ylabel("p99 queuing latency (us, log)  ->  lower = smaller queue")
+ax.set_title("On/off parameter exploration (8:1 incast): green=PFC-free, red=triggers PFC\nprioritizing no under-throughput: shorter OFF-timeout / higher ON-level push util right (but too far -> PFC)")
+ax.grid(alpha=0.3, which="both"); ax.legend(loc="lower right")
+fig4.tight_layout(); fig4.savefig(ART+"/onoff_util_pareto.png", dpi=110); print("saved onoff_util_pareto.png")

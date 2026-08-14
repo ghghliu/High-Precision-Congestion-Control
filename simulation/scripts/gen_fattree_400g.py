@@ -151,6 +151,32 @@ def flows_incast(n: int, size: int = 5 * 1000 * 1000) -> list:
     return rows
 
 
+PROBE_SIZES = [
+    (32 * 1000, "32k"),
+    (64 * 1000, "64k"),
+    (128 * 1000, "128k"),
+    (400 * 1000, "400k"),
+    (1000 * 1000, "1m"),
+    (2000 * 1000, "2m"),
+    (5000 * 1000, "5m"),
+    (20 * 1000 * 1000, "20m"),
+]
+
+
+def flows_probe(size: int) -> list:
+    """8:1 incast already running; a new mouse from host 8 joins the same dest.
+
+    Incast: leaf0 hosts 0-7 -> leaf1 host 16, 80MB from t=2.0
+    Probe:  leaf0 host 8   -> leaf1 host 16, `size` from t=2.001
+    """
+    dest = host_id(1, 0)
+    rows = []
+    for i in range(8):
+        rows.append((host_id(0, i), dest, 200 + i, 80 * 1000 * 1000, 2.000000))
+    rows.append((host_id(0, 8), dest, 100, size, 2.001000))
+    return rows
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mix", default=os.path.join(os.path.dirname(__file__), "..", "mix"))
@@ -165,6 +191,8 @@ def main() -> None:
     write_flows(os.path.join(mix, "ft_incast16_flow.txt"), flows_incast(16))
     write_flows(os.path.join(mix, "ft_outcast4_flow.txt"), flows_outcast(4))
     write_flows(os.path.join(mix, "ft_outcast8_flow.txt"), flows_outcast(8))
+    for size, tag in PROBE_SIZES:
+        write_flows(os.path.join(mix, "ft_probe_%s_flow.txt" % tag), flows_probe(size))
 
 
 if __name__ == "__main__":

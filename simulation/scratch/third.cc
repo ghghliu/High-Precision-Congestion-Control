@@ -49,6 +49,7 @@ double pause_time = 5, simulator_stop_time = 3.01;
 std::string data_rate, link_delay, topology_file, flow_file, trace_file, trace_output_file;
 std::string fct_output_file = "fct.txt";
 std::string pfc_output_file = "pfc.txt";
+std::string rate_trace_file = "";
 
 double alpha_resume_interval = 55, rp_timer, ewma_gain = 1 / 16;
 double rate_decrease_interval = 4;
@@ -657,6 +658,9 @@ int main(int argc, char *argv[])
 			}else if (key.compare("QLEN_MON_END") == 0){
 				conf >> qlen_mon_end;
 				std::cout << "QLEN_MON_END\t\t\t\t" << qlen_mon_end << '\n';
+			}else if (key.compare("RATE_TRACE_FILE") == 0){
+				conf >> rate_trace_file;
+				std::cout << "RATE_TRACE_FILE\t\t\t\t" << rate_trace_file << '\n';
 			}else if (key.compare("MULTI_RATE") == 0){
 				int v;
 				conf >> v;
@@ -877,6 +881,11 @@ int main(int argc, char *argv[])
 
 	#if ENABLE_QP
 	FILE *fct_output = fopen(fct_output_file.c_str(), "w");
+	FILE *rate_trace = NULL;
+	if (!rate_trace_file.empty()){
+		rate_trace = fopen(rate_trace_file.c_str(), "w");
+		RdmaHw::SetRateTrace(rate_trace);
+	}
 	//
 	// install RDMA driver
 	//

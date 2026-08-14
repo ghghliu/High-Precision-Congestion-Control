@@ -13,6 +13,7 @@ TRACE_FILE mix/{trace_nodes}.txt
 TRACE_OUTPUT_FILE mix/mix_{topo}_{trace}_{cc}{failure}.tr
 FCT_OUTPUT_FILE mix/fct_{topo}_{trace}_{cc}{failure}.txt
 PFC_OUTPUT_FILE mix/pfc_{topo}_{trace}_{cc}{failure}.txt
+RATE_TRACE_FILE mix/rate_{topo}_{trace}_{cc}{failure}.txt
 
 SIMULATOR_STOP_TIME {stop}
 

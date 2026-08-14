@@ -109,6 +109,8 @@ ONOFF_BTS_DELAY_THRESH {bts_thresh}
 ONOFF_BTS_LEVEL_UNIT {bts_unit}
 ONOFF_ON_LEVEL_THRESH {on_level}
 ONOFF_OFF_TIMEOUT {off_timeout}
+ONOFF_BTS_RESUME_LEVEL {resume_level}
+ONOFF_BTS_RECENT_WINDOW {recent_window}
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 4000
 L2_ACK_INTERVAL 1
@@ -141,6 +143,7 @@ def write_cfg(name, **kw):
     d = dict(croot=CROOT, out=OUT_C, int_multi=1, min_rate="1000Mb/s",
              t_sense=0, t_sig=0, t_nic_min=0, t_nic_max=0,
              bts_thresh=5000, bts_unit=30000, on_level=4, off_timeout=128000,
+             resume_level=2, recent_window=40000,
              kmax=KMAX_STD, kmin=KMIN_STD, pmax=PMAX_STD, name=name)
     d.update(kw)
     with open("%s/config_%s.txt" % (HROOT, name), "w") as f:
@@ -168,13 +171,13 @@ for exp, sc in scen.items():
 # ---------------- On/Off CC (mode 12) hardware sweep on scenario C ----------------
 # sense = switch queue-table update period; sig = switch->source signaling delay;
 # nic = jittered NIC processing delay (the 3 cases the user asked for).
-def onoff_cfg(name, t_sense, t_sig, t_nic_min, t_nic_max, on_level=4, off_timeout=128000):
+def onoff_cfg(name, t_sense, t_sig, t_nic_min, t_nic_max, on_level=4, off_timeout=128000, bts_thresh=5000):
     sc = scen["C"]
     write_cfg("onoff_%s_C" % name, flow=sc["flow"], trace=sc["trace"], stop=sc["stop"], tr=sc["tr"],
               qcn=1, mode=12, ai=0, hai=0, has_win=0, vwin=0, fr=0, ack=1, int_multi=1,
               min_rate="250Mb/s", kmax=KMAX_ON, kmin=KMIN_ON, pmax=PMAX_ON,
               t_sense=t_sense, t_sig=t_sig, t_nic_min=t_nic_min, t_nic_max=t_nic_max,
-              on_level=on_level, off_timeout=off_timeout)
+              on_level=on_level, off_timeout=off_timeout, bts_thresh=bts_thresh)
 
 onoff_runs = []
 # Context: default-tuned cases (on_level=4, off_timeout=128us) across the 3 NIC cases.
@@ -203,6 +206,17 @@ onoff_cfg("pf_t96", 4000, 8000, 4000, 32000, on_level=8, off_timeout=96000); ono
 onoff_cfg("pf2_nic4_t32", 4000, 8000, 4000, 4000, on_level=8, off_timeout=32000); onoff_runs.append("pf2_nic4_t32")
 onoff_cfg("pf2_nic4_t16", 4000, 8000, 4000, 4000, on_level=8, off_timeout=16000); onoff_runs.append("pf2_nic4_t16")
 onoff_cfg("pf2_nic4_t8",  4000, 8000, 4000, 4000, on_level=8, off_timeout=8000);  onoff_runs.append("pf2_nic4_t8")
+
+# ---- ON as the PRIMARY anti-under-throughput mechanism (off-timeout DISABLED) ----
+# Lower BtsDelayThresh so ON notifications keep coming during the queue drain, so
+# ON (not the timeout) resumes flows. Grid BtsDelayThresh x ON-level, nic=4-32, no timeout.
+for d in (1000, 2000, 5000):
+    for l in (2, 4):
+        nm = "onpri_d%d_l%d" % (d//1000, l)
+        onoff_cfg(nm, 4000, 8000, 4000, 32000, on_level=l, off_timeout=0, bts_thresh=d); onoff_runs.append(nm)
+# best ON-only candidate across NIC cases (BtsDelayThresh=1us, ON-level<2, no timeout)
+onoff_cfg("onpri_nic4",   4000, 8000, 4000, 4000,   on_level=2, off_timeout=0, bts_thresh=1000); onoff_runs.append("onpri_nic4")
+onoff_cfg("onpri_nic100", 4000, 8000, 4000, 100000, on_level=2, off_timeout=0, bts_thresh=1000); onoff_runs.append("onpri_nic100")
 
 print("topology: %d nodes, %d links" % (nnode, len(links)))
 print("Scenario C incast: %d senders -> host%d (single bottleneck leaf0->host0 400G)" % (len(sendersC), rcv))

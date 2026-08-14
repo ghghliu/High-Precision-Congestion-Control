@@ -44,8 +44,13 @@ protected:
 	uint64_t m_btsDelayThresh;  // per-packet queuing delay that triggers a BTS (ns)
 	uint64_t m_btsLevelUnit;    // bytes per quantized queue level (16 levels)
 	uint32_t m_qLevel[pCnt];    // periodically-updated quantized queue level per port
+	uint32_t m_qLevelPrev[pCnt];// previous sampled level (for edge-triggered proactive resume)
 	bool m_btsStarted;
 	std::unordered_map<uint64_t, uint64_t> m_lastBts; // (port,src) -> last BTS time (ns), rate-limits to 1/sense
+	// proactive resume: recent senders per egress port -> last-seen time (ns)
+	std::unordered_map<uint32_t, std::unordered_map<uint64_t, uint64_t> > m_recentSrc;
+	uint32_t m_btsResumeLevel;  // proactively notify recent senders when level < this
+	uint64_t m_btsRecentWindow; // only notify senders seen within this window (ns)
 	void BtsSampleQueues();
 
 private:

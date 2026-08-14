@@ -73,6 +73,7 @@ bool rate_bound = true;
 uint64_t onoff_t_sense = 8000, onoff_t_sig = 8000, onoff_t_nic_min = 16000, onoff_t_nic_max = 100000;
 uint64_t onoff_bts_delay_thresh = 5000, onoff_bts_level_unit = 30000;
 uint32_t onoff_on_level = 4; uint64_t onoff_off_timeout = 128000;
+uint32_t onoff_bts_resume_level = 2; uint64_t onoff_bts_recent_window = 40000;
 
 uint32_t ack_high_prio = 0;
 uint64_t link_down_time = 0;
@@ -563,6 +564,12 @@ int main(int argc, char *argv[])
 			}else if (key.compare("ONOFF_OFF_TIMEOUT") == 0){
 				conf >> onoff_off_timeout;
 				std::cout << "ONOFF_OFF_TIMEOUT\t\t" << onoff_off_timeout << "\n";
+			}else if (key.compare("ONOFF_BTS_RESUME_LEVEL") == 0){
+				conf >> onoff_bts_resume_level;
+				std::cout << "ONOFF_BTS_RESUME_LEVEL\t\t" << onoff_bts_resume_level << "\n";
+			}else if (key.compare("ONOFF_BTS_RECENT_WINDOW") == 0){
+				conf >> onoff_bts_recent_window;
+				std::cout << "ONOFF_BTS_RECENT_WINDOW\t\t" << onoff_bts_recent_window << "\n";
 			}else if (key.compare("MIN_RATE") == 0){
 				conf >> min_rate;
 				std::cout << "MIN_RATE\t\t" << min_rate << "\n";
@@ -974,6 +981,8 @@ int main(int argc, char *argv[])
 			sw->SetAttribute("BtsSig", UintegerValue(onoff_t_sig));
 			sw->SetAttribute("BtsDelayThresh", UintegerValue(onoff_bts_delay_thresh));
 			sw->SetAttribute("BtsLevelUnit", UintegerValue(onoff_bts_level_unit));
+			sw->SetAttribute("BtsResumeLevel", UintegerValue(onoff_bts_resume_level));
+			sw->SetAttribute("BtsRecentWindow", UintegerValue(onoff_bts_recent_window));
 		}
 	}
 

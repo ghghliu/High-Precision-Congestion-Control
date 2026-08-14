@@ -79,6 +79,16 @@ TypeId SwitchNode::GetTypeId (void)
 			UintegerValue(30000),
 			MakeUintegerAccessor(&SwitchNode::m_btsLevelUnit),
 			MakeUintegerChecker<uint64_t>())
+	.AddAttribute("BtsResumeLevel",
+			"On/Off CC: proactively notify recent senders when the queue level drops below this",
+			UintegerValue(2),
+			MakeUintegerAccessor(&SwitchNode::m_btsResumeLevel),
+			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("BtsRecentWindow",
+			"On/Off CC: only proactively notify senders seen within this window (ns)",
+			UintegerValue(40000),
+			MakeUintegerAccessor(&SwitchNode::m_btsRecentWindow),
+			MakeUintegerChecker<uint64_t>())
   ;
   return tid;
 }
@@ -98,9 +108,10 @@ SwitchNode::SwitchNode(){
 	for (uint32_t i = 0; i < pCnt; i++)
 		m_u[i] = 0;
 	for (uint32_t i = 0; i < pCnt; i++)
-		m_qLevel[i] = 0;
+		m_qLevel[i] = m_qLevelPrev[i] = 0;
 	m_btsStarted = false;
 	m_btsSense = 8000; m_btsSig = 8000; m_btsDelayThresh = 5000; m_btsLevelUnit = 30000;
+	m_btsResumeLevel = 2; m_btsRecentWindow = 40000;
 }
 
 // On/off CC: periodically sample each egress port's queue depth and store it as
@@ -112,7 +123,24 @@ void SwitchNode::BtsSampleQueues(){
 		uint64_t qb = dev->GetQueue()->GetNBytesTotal();
 		uint32_t lvl = (uint32_t)(qb / m_btsLevelUnit);
 		if (lvl > 15) lvl = 15;
+		uint32_t prev = m_qLevelPrev[i];
+		m_qLevelPrev[i] = lvl;
 		m_qLevel[i] = lvl;
+		// Proactive resume (edge-triggered): only when the queue level crosses
+		// DOWN through the resume level, notify recently-seen senders once, so
+		// throttled flows resume even if they no longer send enough packets to
+		// trigger their own notification -- without re-notifying every period.
+		if (lvl < m_btsResumeLevel && prev >= m_btsResumeLevel){
+			std::unordered_map<uint64_t, uint64_t> &rs = m_recentSrc[i];
+			uint64_t now = Simulator::Now().GetTimeStep();
+			for (auto it = rs.begin(); it != rs.end(); ){
+				if (now - it->second >= m_btsRecentWindow){ it = rs.erase(it); continue; }
+				uint32_t srcNode = (uint32_t)(it->first >> 32);
+				uint32_t dip = (uint32_t)(it->first & 0xffffffff);
+				Simulator::Schedule(NanoSeconds(m_btsSig), &RdmaHw::DeliverBtsOn, srcNode, dip, (uint16_t)0, (uint16_t)0, lvl);
+				++it;
+			}
+		}
 	}
 	uint64_t per = m_btsSense ? m_btsSense : 1000; // guard against 0 (would loop at t=0)
 	Simulator::Schedule(NanoSeconds(per), &SwitchNode::BtsSampleQueues, this);
@@ -283,28 +311,25 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
 		// threshold, send a back-to-sender ON notification to its source.
 		if (m_ccMode == 12){
 			if (!m_btsStarted){ m_btsStarted = true; BtsSampleQueues(); }
-			QueueDelayTag qt;
-			if (p->PeekPacketTag(qt)){
-				uint64_t qdelay = Simulator::Now().GetTimeStep() - qt.GetTime();
-				if (qdelay > m_btsDelayThresh){
-					uint8_t* buf = p->GetBuffer();
-					uint32_t ppp = PppHeader::GetStaticSize();
-					if (buf[ppp + 9] == 0x11){ // UDP data packet
-						uint32_t sip = (uint32_t(buf[ppp+12])<<24)|(uint32_t(buf[ppp+13])<<16)|(uint32_t(buf[ppp+14])<<8)|uint32_t(buf[ppp+15]);
-						uint32_t dip = (uint32_t(buf[ppp+16])<<24)|(uint32_t(buf[ppp+17])<<16)|(uint32_t(buf[ppp+18])<<8)|uint32_t(buf[ppp+19]);
-						uint16_t sport = (uint16_t(buf[ppp+20])<<8)|uint16_t(buf[ppp+21]);
-						uint32_t a = sip - 0x0b000001;
-						uint32_t srcNode = ((a>>16)&0xff)*256 + ((a>>8)&0xff);
-						// Rate-limit: at most one back-to-sender per source per table-update
-						// period (the queue-level table only refreshes every m_btsSense).
-						uint64_t key = ((uint64_t)ifIndex << 32) | srcNode;
-						uint64_t now = Simulator::Now().GetTimeStep();
-						uint64_t per = m_btsSense ? m_btsSense : 1000; // guard 0 -> no per-packet storm
-						auto it = m_lastBts.find(key);
-						if (it == m_lastBts.end() || now - it->second >= per){
-							m_lastBts[key] = now;
-							Simulator::Schedule(NanoSeconds(m_btsSig), &RdmaHw::DeliverBtsOn, srcNode, dip, sport, (uint16_t)qIndex, m_qLevel[ifIndex]);
-						}
+			uint8_t* buf = p->GetBuffer();
+			uint32_t ppp = PppHeader::GetStaticSize();
+			if (buf[ppp + 9] == 0x11){ // UDP data packet
+				uint32_t sip = (uint32_t(buf[ppp+12])<<24)|(uint32_t(buf[ppp+13])<<16)|(uint32_t(buf[ppp+14])<<8)|uint32_t(buf[ppp+15]);
+				uint32_t dip = (uint32_t(buf[ppp+16])<<24)|(uint32_t(buf[ppp+17])<<16)|(uint32_t(buf[ppp+18])<<8)|uint32_t(buf[ppp+19]);
+				uint16_t sport = (uint16_t(buf[ppp+20])<<8)|uint16_t(buf[ppp+21]);
+				uint32_t a = sip - 0x0b000001;
+				uint32_t srcNode = ((a>>16)&0xff)*256 + ((a>>8)&0xff);
+				uint64_t now = Simulator::Now().GetTimeStep();
+				m_recentSrc[ifIndex][((uint64_t)srcNode<<32)|dip] = now; // for proactive resume
+				// delay-triggered back-to-sender (rate-limited to 1 per source per sense)
+				QueueDelayTag qt;
+				if (p->PeekPacketTag(qt) && (now - qt.GetTime()) > m_btsDelayThresh){
+					uint64_t key = ((uint64_t)ifIndex << 32) | srcNode;
+					uint64_t per = m_btsSense ? m_btsSense : 1000;
+					auto it = m_lastBts.find(key);
+					if (it == m_lastBts.end() || now - it->second >= per){
+						m_lastBts[key] = now;
+						Simulator::Schedule(NanoSeconds(m_btsSig), &RdmaHw::DeliverBtsOn, srcNode, dip, sport, (uint16_t)qIndex, m_qLevel[ifIndex]);
 					}
 				}
 			}

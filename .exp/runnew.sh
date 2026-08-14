@@ -2,7 +2,7 @@
 set -e
 cd /home/ubuntu/repo/simulation
 OUT=/home/ubuntu/repo/.exp/out
-NEW="onoff_pf2_nic4_t32_C onoff_pf2_nic4_t16_C onoff_pf2_nic4_t8_C"
+NEW="onoff_hu_t64_l8_C onoff_nic4_32_C onoff_pf_nic100_C"
 for name in $NEW; do
   echo "[run] $name"; ./waf --run "scratch/third /home/ubuntu/repo/.exp/config_${name}.txt" >$OUT/log_${name}.txt 2>&1
 done

@@ -44,6 +44,11 @@ TypeId RdmaHw::GetTypeId (void)
 				UintegerValue(128000),
 				MakeUintegerAccessor(&RdmaHw::m_onoff_off_timeout),
 				MakeUintegerChecker<uint64_t>())
+		.AddAttribute("OnOffOnConfirm",
+				"On/Off dual-ECN: consecutive unmarked ACKs (queue<Klow) required before resuming",
+				UintegerValue(1),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_on_confirm),
+				MakeUintegerChecker<uint32_t>())
 		.AddAttribute("Mtu",
 				"Mtu.",
 				UintegerValue(1000),
@@ -271,7 +276,7 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 		qp->tmly.m_curRate = m_bps;
 	}else if (m_cc_mode == 10){
 		qp->hpccPint.m_curRate = m_bps;
-	}else if (m_cc_mode == 12){
+	}else if (m_cc_mode == 12 || m_cc_mode == 13){
 		// per-DIP control: register this QP under its destination and start "on"
 		m_onoffQps[dip.Get()].push_back(qp);
 		m_onoffCtx[dip.Get()]; // create default ctx if absent (applied=on)
@@ -342,8 +347,14 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch){
 		seqh.SetSport(ch.udp.dport);
 		seqh.SetDport(ch.udp.sport);
 		seqh.SetIntHeader(ch.udp.ih);
-		if (ecnbits)
+		if (m_cc_mode == 13){ // dual-watermark: reflect high (CE/11) and low (ECT1/01) separately
+			if (ecnbits == 0x03)
+				seqh.SetCnp();
+			else if (ecnbits == 0x01)
+				seqh.SetEcnLow();
+		}else if (ecnbits){
 			seqh.SetCnp();
+		}
 
 		Ptr<Packet> newp = Create<Packet>(std::max(60-14-20-(int)seqh.GetSerializedSize(), 0));
 		newp->AddHeader(seqh);
@@ -457,6 +468,9 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch){
 		HandleAckHpPint(qp, p, ch);
 	}else if (m_cc_mode == 12){
 		HandleAckOnOff(qp, cnp != 0);
+	}else if (m_cc_mode == 13){
+		uint8_t ecnlow = (ch.ack.flags >> qbbHeader::FLAG_ECNLOW) & 1;
+		HandleAckDualEcn(qp, cnp != 0, ecnlow != 0);
 	}
 	// ACK may advance the on-the-fly window, allowing more packets to send
 	dev->TriggerTransmit();
@@ -655,6 +669,30 @@ void RdmaHw::HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested){
 		Simulator::Cancel(c.timeout);
 	if (m_onoff_off_timeout > 0)
 		c.timeout = Simulator::Schedule(NanoSeconds(m_onoff_off_timeout), &RdmaHw::OnOffTimeout, this, dip);
+}
+
+// Dual-watermark on/off (mode 13), all on the guaranteed per-flow ACK path:
+//   high (CE/11, queue>Khigh)      -> OFF (throttle), refresh backstop watchdog
+//   low  (ECT1/01, Klow<=q<Khigh)  -> HOLD (hysteresis band)
+//   none (unmarked, q<Klow)        -> ON after m_onoff_on_confirm consecutive unmarked
+// A throttled flow still receives an ACK per packet it sends, so an unmarked ACK
+// (queue drained below Klow) is itself the resume signal -> no switch flow tracking.
+void RdmaHw::HandleAckDualEcn(Ptr<RdmaQueuePair> qp, bool high, bool low){
+	uint32_t dip = qp->dip.Get();
+	OnOffCtx &c = m_onoffCtx[dip];
+	if (high){
+		c.unmarked = 0;
+		OnOffSignal(dip, true);
+		if (c.timeout.IsRunning())
+			Simulator::Cancel(c.timeout);
+		if (m_onoff_off_timeout > 0)
+			c.timeout = Simulator::Schedule(NanoSeconds(m_onoff_off_timeout), &RdmaHw::OnOffTimeout, this, dip);
+	}else if (low){
+		c.unmarked = 0; // hysteresis band: hold current state
+	}else{
+		if (++c.unmarked >= m_onoff_on_confirm)
+			OnOffSignal(dip, false);
+	}
 }
 
 // ON path: a SwitchNode delivers a rate-limited back-to-sender notification

@@ -293,13 +293,19 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
 		m_mmu->RemoveFromEgressAdmission(ifIndex, qIndex, p->GetSize());
 		m_bytes[inDev][ifIndex][qIndex] -= p->GetSize();
 		if (m_ecnEnabled){
-			bool egressCongested = m_mmu->ShouldSendCN(ifIndex, qIndex);
-			if (egressCongested){
+			uint8_t ecn = 0;
+			if (m_ccMode == 13){ // dual-watermark on/off: 01 in [Klow,Khigh), 11 above Khigh
+				uint32_t lvl = m_mmu->EcnLevel(ifIndex, qIndex);
+				ecn = (lvl == 2) ? 0x03 : (lvl == 1 ? 0x01 : 0);
+			}else if (m_mmu->ShouldSendCN(ifIndex, qIndex)){
+				ecn = 0x03;
+			}
+			if (ecn){
 				PppHeader ppp;
 				Ipv4Header h;
 				p->RemoveHeader(ppp);
 				p->RemoveHeader(h);
-				h.SetEcn((Ipv4Header::EcnType)0x03);
+				h.SetEcn((Ipv4Header::EcnType)ecn);
 				p->AddHeader(h);
 				p->AddHeader(ppp);
 			}

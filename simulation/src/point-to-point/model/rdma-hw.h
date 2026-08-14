@@ -170,13 +170,15 @@ public:
 	uint64_t m_onoff_t_nic_min, m_onoff_t_nic_max; // NIC processing delay jitter range (ns)
 	uint32_t m_onoff_on_level;      // BTS -> ON only if carried queue level < this
 	uint64_t m_onoff_off_timeout;   // ns; resume if no CNP for this long while OFF (0=disabled)
+	uint32_t m_onoff_on_confirm;    // dual-ECN: # consecutive unmarked ACKs (queue<Klow) before ON
 	struct OnOffCtx {
-		bool applied; bool target; bool pending; EventId timeout;
-		OnOffCtx() : applied(false), target(false), pending(false) {}
+		bool applied; bool target; bool pending; EventId timeout; uint32_t unmarked;
+		OnOffCtx() : applied(false), target(false), pending(false), unmarked(0) {}
 	};
 	std::map<uint32_t, OnOffCtx> m_onoffCtx;                          // per-DIP control state
 	std::map<uint32_t, std::vector<Ptr<RdmaQueuePair> > > m_onoffQps; // per-DIP QP list
 	void HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested); // OFF via ECN->CNP (per DIP)
+	void HandleAckDualEcn(Ptr<RdmaQueuePair> qp, bool high, bool low); // dual-watermark on/off (mode 13)
 	void OnOffSignal(uint32_t dip, bool congested);            // latch latest signal for a DIP
 	void OnOffApply(uint32_t dip);                             // apply latest state after NIC delay
 	void OnOffTimeout(uint32_t dip);                           // OFF watchdog -> resume

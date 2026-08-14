@@ -108,6 +108,17 @@ namespace ns3 {
 		}
 		return false;
 	}
+	// Dual-watermark classification for the on/off dual-ECN scheme (deterministic):
+	//   queue > kmax(=Khigh) -> 2 (high, mark CE/11); > kmin(=Klow) -> 1 (low, mark ECT1/01)
+	uint32_t SwitchMmu::EcnLevel(uint32_t ifindex, uint32_t qIndex){
+		if (qIndex == 0)
+			return 0;
+		if (egress_bytes[ifindex][qIndex] > kmax[ifindex])
+			return 2;
+		if (egress_bytes[ifindex][qIndex] > kmin[ifindex])
+			return 1;
+		return 0;
+	}
 	void SwitchMmu::ConfigEcn(uint32_t port, uint32_t _kmin, uint32_t _kmax, double _pmax){
 		kmin[port] = _kmin * 1000;
 		kmax[port] = _kmax * 1000;

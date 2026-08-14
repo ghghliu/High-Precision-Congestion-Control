@@ -35,6 +35,7 @@ public:
 	uint32_t GetSharedUsed(uint32_t port, uint32_t qIndex);
 
 	bool ShouldSendCN(uint32_t ifindex, uint32_t qIndex);
+	uint32_t EcnLevel(uint32_t ifindex, uint32_t qIndex); // dual watermark: 0=none,1=low(>kmin),2=high(>kmax)
 
 	void ConfigEcn(uint32_t port, uint32_t _kmin, uint32_t _kmax, double _pmax);
 	void ConfigHdrm(uint32_t port, uint32_t size);

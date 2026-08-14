@@ -111,6 +111,7 @@ ONOFF_ON_LEVEL_THRESH {on_level}
 ONOFF_OFF_TIMEOUT {off_timeout}
 ONOFF_BTS_RESUME_LEVEL {resume_level}
 ONOFF_BTS_RECENT_WINDOW {recent_window}
+ONOFF_ON_CONFIRM {on_confirm}
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 4000
 L2_ACK_INTERVAL 1
@@ -143,7 +144,7 @@ def write_cfg(name, **kw):
     d = dict(croot=CROOT, out=OUT_C, int_multi=1, min_rate="1000Mb/s",
              t_sense=0, t_sig=0, t_nic_min=0, t_nic_max=0,
              bts_thresh=5000, bts_unit=30000, on_level=4, off_timeout=128000,
-             resume_level=2, recent_window=40000,
+             resume_level=2, recent_window=40000, on_confirm=1,
              kmax=KMAX_STD, kmin=KMIN_STD, pmax=PMAX_STD, name=name)
     d.update(kw)
     with open("%s/config_%s.txt" % (HROOT, name), "w") as f:
@@ -218,7 +219,31 @@ for d in (1000, 2000, 5000):
 onoff_cfg("onpri_nic4",   4000, 8000, 4000, 4000,   on_level=2, off_timeout=0, bts_thresh=1000); onoff_runs.append("onpri_nic4")
 onoff_cfg("onpri_nic100", 4000, 8000, 4000, 100000, on_level=2, off_timeout=0, bts_thresh=1000); onoff_runs.append("onpri_nic100")
 
+# ---- Dual-watermark on/off (mode 13): resume rides the guaranteed per-flow ACK ----
+# Klow/Khigh in KB. queue>Khigh -> OFF; Klow<=q<Khigh -> hold (hysteresis); q<Klow -> ON.
+def dualecn_cfg(name, klow, khigh, t_nic_min, t_nic_max, on_confirm=1, off_timeout=460000):
+    sc = scen["C"]
+    KMIN = "2 400000000000 %d 3200000000000 %d" % (klow, klow)
+    KMAX = "2 400000000000 %d 3200000000000 %d" % (khigh, khigh)
+    write_cfg("de_%s_C" % name, flow=sc["flow"], trace=sc["trace"], stop=sc["stop"], tr=sc["tr"],
+              qcn=1, mode=13, ai=0, hai=0, has_win=0, vwin=0, fr=0, ack=1, int_multi=1,
+              min_rate="250Mb/s", kmax=KMAX, kmin=KMIN, pmax=PMAX_ON,
+              t_nic_min=t_nic_min, t_nic_max=t_nic_max, off_timeout=off_timeout, on_confirm=on_confirm)
+
+de_runs = []
+# watermark grid (nic=4-32us, 460us backstop, confirm=1)
+for (kl, kh) in [(20,100),(20,200),(50,200),(100,200),(50,400),(100,400)]:
+    nm = "l%d_h%d" % (kl, kh); dualecn_cfg(nm, kl, kh, 4000, 32000); de_runs.append(nm)
+# ON-confirm (state debounce) sweep on a mid watermark
+dualecn_cfg("l50_h200_c4", 50, 200, 4000, 32000, on_confirm=4); de_runs.append("l50_h200_c4")
+# pure dual-ECN ON (backstop DISABLED) -> does ON alone avoid under-throughput?
+dualecn_cfg("l50_h200_noto", 50, 200, 4000, 32000, off_timeout=0); de_runs.append("l50_h200_noto")
+# NIC robustness of a mid watermark
+dualecn_cfg("nic4",   50, 200, 4000, 4000);   de_runs.append("nic4")
+dualecn_cfg("nic100", 50, 200, 4000, 100000); de_runs.append("nic100")
+
 print("topology: %d nodes, %d links" % (nnode, len(links)))
+print("dual-ECN(mode13) configs: %s" % ", ".join("de_%s_C" % r for r in de_runs))
 print("Scenario C incast: %d senders -> host%d (single bottleneck leaf0->host0 400G)" % (len(sendersC), rcv))
 print("baseline configs: %s on A,B,C" % ",".join(presets))
 print("on/off configs: %s" % ", ".join("onoff_%s_C" % r for r in onoff_runs))

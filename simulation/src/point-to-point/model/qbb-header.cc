@@ -44,6 +44,9 @@ namespace ns3 {
 		NS_ASSERT_MSG(IntHeader::mode == 1, "qbbHeader cannot SetTs when IntHeader::mode != 1");
 		ih.ts = ts;
 	}
+	void qbbHeader::SetEcnLow(){
+		flags |= 1 << FLAG_ECNLOW;
+	}
 	void qbbHeader::SetCnp(){
 		flags |= 1 << FLAG_CNP;
 	}

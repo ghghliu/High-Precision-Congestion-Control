@@ -72,6 +72,7 @@ bool rate_bound = true;
 // On/Off CC (mode 12) hardware-limited control-loop delays (ns)
 uint64_t onoff_t_sense = 8000, onoff_t_sig = 8000, onoff_t_nic_min = 16000, onoff_t_nic_max = 100000;
 uint64_t onoff_bts_delay_thresh = 5000, onoff_bts_level_unit = 30000;
+uint32_t onoff_on_level = 4; uint64_t onoff_off_timeout = 128000;
 
 uint32_t ack_high_prio = 0;
 uint64_t link_down_time = 0;
@@ -556,6 +557,12 @@ int main(int argc, char *argv[])
 			}else if (key.compare("ONOFF_BTS_LEVEL_UNIT") == 0){
 				conf >> onoff_bts_level_unit;
 				std::cout << "ONOFF_BTS_LEVEL_UNIT\t\t" << onoff_bts_level_unit << "\n";
+			}else if (key.compare("ONOFF_ON_LEVEL_THRESH") == 0){
+				conf >> onoff_on_level;
+				std::cout << "ONOFF_ON_LEVEL_THRESH\t\t" << onoff_on_level << "\n";
+			}else if (key.compare("ONOFF_OFF_TIMEOUT") == 0){
+				conf >> onoff_off_timeout;
+				std::cout << "ONOFF_OFF_TIMEOUT\t\t" << onoff_off_timeout << "\n";
 			}else if (key.compare("MIN_RATE") == 0){
 				conf >> min_rate;
 				std::cout << "MIN_RATE\t\t" << min_rate << "\n";
@@ -894,6 +901,8 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("MinRate", DataRateValue(DataRate(min_rate)));
 			rdmaHw->SetAttribute("OnOffTNicMin", UintegerValue(onoff_t_nic_min));
 			rdmaHw->SetAttribute("OnOffTNicMax", UintegerValue(onoff_t_nic_max));
+			rdmaHw->SetAttribute("OnOffOnLevel", UintegerValue(onoff_on_level));
+			rdmaHw->SetAttribute("OnOffOffTimeout", UintegerValue(onoff_off_timeout));
 			rdmaHw->SetAttribute("Mtu", UintegerValue(packet_payload_size));
 			rdmaHw->SetAttribute("MiThresh", UintegerValue(mi_thresh));
 			rdmaHw->SetAttribute("VarWin", BooleanValue(var_win));

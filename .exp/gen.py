@@ -107,6 +107,8 @@ ONOFF_T_NIC_MIN {t_nic_min}
 ONOFF_T_NIC_MAX {t_nic_max}
 ONOFF_BTS_DELAY_THRESH {bts_thresh}
 ONOFF_BTS_LEVEL_UNIT {bts_unit}
+ONOFF_ON_LEVEL_THRESH {on_level}
+ONOFF_OFF_TIMEOUT {off_timeout}
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 4000
 L2_ACK_INTERVAL 1
@@ -138,7 +140,7 @@ QLEN_MON_END 2000000001
 def write_cfg(name, **kw):
     d = dict(croot=CROOT, out=OUT_C, int_multi=1, min_rate="1000Mb/s",
              t_sense=0, t_sig=0, t_nic_min=0, t_nic_max=0,
-             bts_thresh=5000, bts_unit=30000,
+             bts_thresh=5000, bts_unit=30000, on_level=4, off_timeout=128000,
              kmax=KMAX_STD, kmin=KMIN_STD, pmax=PMAX_STD, name=name)
     d.update(kw)
     with open("%s/config_%s.txt" % (HROOT, name), "w") as f:
@@ -166,25 +168,32 @@ for exp, sc in scen.items():
 # ---------------- On/Off CC (mode 12) hardware sweep on scenario C ----------------
 # sense = switch queue-table update period; sig = switch->source signaling delay;
 # nic = jittered NIC processing delay (the 3 cases the user asked for).
-def onoff_cfg(name, t_sense, t_sig, t_nic_min, t_nic_max):
+def onoff_cfg(name, t_sense, t_sig, t_nic_min, t_nic_max, on_level=4, off_timeout=128000):
     sc = scen["C"]
     write_cfg("onoff_%s_C" % name, flow=sc["flow"], trace=sc["trace"], stop=sc["stop"], tr=sc["tr"],
               qcn=1, mode=12, ai=0, hai=0, has_win=0, vwin=0, fr=0, ack=1, int_multi=1,
               min_rate="250Mb/s", kmax=KMAX_ON, kmin=KMIN_ON, pmax=PMAX_ON,
-              t_sense=t_sense, t_sig=t_sig, t_nic_min=t_nic_min, t_nic_max=t_nic_max)
+              t_sense=t_sense, t_sig=t_sig, t_nic_min=t_nic_min, t_nic_max=t_nic_max,
+              on_level=on_level, off_timeout=off_timeout)
 
 onoff_runs = []
-onoff_cfg("ideal", 0, 0, 0, 0); onoff_runs.append("ideal")     # no hardware delay
-# 3 NIC cases at sense=8us, sig=8us
+onoff_cfg("ideal", 1000, 0, 0, 0); onoff_runs.append("ideal")   # minimal hardware delay
+# 3 NIC cases at sense=8us, sig=8us (level-gated ON, 128us OFF timeout)
 onoff_cfg("nic4",    8000, 8000, 4000, 4000);   onoff_runs.append("nic4")    # fixed 4us
 onoff_cfg("nic4_32", 8000, 8000, 4000, 32000);  onoff_runs.append("nic4_32") # 4-32us
 onoff_cfg("nic4_100",8000, 8000, 4000, 100000); onoff_runs.append("nic4_100")# 4-100us
-# sense sweep {1,4,8,16}us (sig=8, nic 4-32)
+# sense sweep {1,4,16}us (sig=8, nic 4-32)
 for ts in (1000, 4000, 16000):
     onoff_cfg("s%d" % (ts//1000), ts, 8000, 4000, 32000); onoff_runs.append("s%d" % (ts//1000))
 # sig sweep {4,16}us (sense=8, nic 4-32)
 for tg in (4000, 16000):
     onoff_cfg("g%d" % (tg//1000), 8000, tg, 4000, 32000); onoff_runs.append("g%d" % (tg//1000))
+# OFF-timeout sweep {64,128,460}us (nic 4-32, sense8, sig8); 128 == nic4_32
+onoff_cfg("to64",  8000, 8000, 4000, 32000, off_timeout=64000);  onoff_runs.append("to64")
+onoff_cfg("to460", 8000, 8000, 4000, 32000, off_timeout=460000); onoff_runs.append("to460")
+# ON-level threshold sweep {2,8} (nic 4-32)
+onoff_cfg("lvl2", 8000, 8000, 4000, 32000, on_level=2); onoff_runs.append("lvl2")
+onoff_cfg("lvl8", 8000, 8000, 4000, 32000, on_level=8); onoff_runs.append("lvl8")
 
 print("topology: %d nodes, %d links" % (nnode, len(links)))
 print("Scenario C incast: %d senders -> host%d (single bottleneck leaf0->host0 400G)" % (len(sendersC), rcv))

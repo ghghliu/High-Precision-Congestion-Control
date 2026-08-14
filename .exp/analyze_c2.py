@@ -46,7 +46,7 @@ def npfc(name):
     return n
 
 baselines = [("pfc_C","PFC-only"),("dcqcn_C","DCQCN"),("hpcc_C","HPCC"),("timely_C","TIMELY")]
-onoff = [("onoff_ideal_C","on/off ideal(no HW delay)"),
+onoff = [("onoff_ideal_C","on/off ideal(min HW delay)"),
          ("onoff_nic4_C","on/off nic=4us"),
          ("onoff_nic4_32_C","on/off nic=4-32us"),
          ("onoff_nic4_100_C","on/off nic=4-100us"),
@@ -54,7 +54,11 @@ onoff = [("onoff_ideal_C","on/off ideal(no HW delay)"),
          ("onoff_s4_C","on/off sense=4us"),
          ("onoff_s16_C","on/off sense=16us"),
          ("onoff_g4_C","on/off sig=4us"),
-         ("onoff_g16_C","on/off sig=16us")]
+         ("onoff_g16_C","on/off sig=16us"),
+         ("onoff_to64_C","on/off off-timeout=64us"),
+         ("onoff_to460_C","on/off off-timeout=460us"),
+         ("onoff_lvl2_C","on/off on-level<2"),
+         ("onoff_lvl8_C","on/off on-level<8")]
 
 def rowstr(name, lab):
     return "%-26s %8.1f %11.0f %11.0f %11.1f %11.1f %10d" % (
@@ -97,14 +101,16 @@ def tser(name):
     d = T.get(name, {}); return [i*0.2 for i in range(50)], [d.get(i,0)*8/200e-6/1e9 for i in range(50)]
 def qser(name):
     d = Q.get(name, {}); return [i*0.01 for i in range(1000)], [d.get(i,0)/1000.0 for i in range(1000)]
+ts_sel = [("hpcc_C","HPCC"),("dcqcn_C","DCQCN"),("onoff_nic4_C","on/off nic=4us"),
+          ("onoff_nic4_100_C","on/off nic=4-100us"),("onoff_to64_C","on/off off-timeout=64us")]
 fig3, (c1, c2) = plt.subplots(1, 2, figsize=(15, 5.5))
-for name, lab in [("hpcc_C","HPCC"),("dcqcn_C","DCQCN"),("onoff_nic4_C","on/off nic=4us (stuck OFF)"),("onoff_nic4_32_C","on/off nic=4-32us (stuck ON)")]:
+for name, lab in ts_sel:
     x,y = tser(name); c1.plot(x, y, lw=1.3, label=lab)
 c1.axhline(400, color="gray", ls=":"); c1.set_ylim(0,460); c1.set_title("Aggregate throughput at bottleneck")
 c1.set_xlabel("time (ms)"); c1.set_ylabel("Gbps"); c1.grid(alpha=0.3); c1.legend(fontsize=8)
-for name, lab in [("hpcc_C","HPCC"),("dcqcn_C","DCQCN"),("onoff_nic4_C","on/off nic=4us"),("onoff_nic4_32_C","on/off nic=4-32us")]:
+for name, lab in ts_sel:
     x,y = qser(name); c2.plot(x, y, lw=1.0, label=lab)
 c2.set_title("Bottleneck queue length"); c2.set_xlabel("time (ms)"); c2.set_ylabel("queue (KB)")
 c2.set_yscale("symlog"); c2.grid(alpha=0.3); c2.legend(fontsize=8)
-fig3.suptitle("On/off is unstable: stuck-OFF (under-throughput) vs stuck-ON (overshoot+PFC)", fontsize=12)
+fig3.suptitle("On/off (corrected): 0 PFC, bounded queue; util vs queue tradeoff via HW delays / timeout", fontsize=12)
 fig3.tight_layout(); fig3.savefig(ART+"/onoff_aligned_timeseries.png", dpi=110); print("saved onoff_aligned_timeseries.png")

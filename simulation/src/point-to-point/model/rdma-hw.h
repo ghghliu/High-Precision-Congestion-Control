@@ -153,21 +153,33 @@ public:
 	void UpdateRateHpPint(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch, bool fast_react);
 
 	/**********************
-	 * On/Off CC (mode 12)
-	 * Binary rate control: full line rate (on) or a fixed low rate (m_minRate,
-	 * e.g. 250Mbps, off).
+	 * On/Off CC (mode 12) -- controlled per destination IP (DIP), not per QP.
+	 * Binary rate: full line rate (on) or a fixed low rate (m_minRate, e.g. 250Mbps).
 	 *  - OFF: switch marks ECN when the egress queue exceeds a threshold; the
-	 *    receiver echoes it as CNP in the ACK (every flow is fed back).
-	 *  - ON : the switch sends a "back to sender" notification (triggered when a
-	 *    packet's queuing delay exceeds a threshold) directly to the source; its
-	 *    arrival restores full rate. Switch-side sensing period and signaling
-	 *    delay live in SwitchNode; the source adds a jittered NIC processing
-	 *    delay before the rate change actually takes effect.
+	 *    receiver echoes it as CNP in the ACK. Any CNP for a DIP throttles ALL
+	 *    QPs to that DIP. While OFF, if no CNP arrives for m_onoff_off_timeout,
+	 *    the source exits OFF and resumes full rate (avoids the stuck-OFF
+	 *    deadlock when congestion clears and no notification is generated).
+	 *  - ON : the switch sends a rate-limited "back to sender" notification
+	 *    (triggered when a packet's queuing delay exceeds a threshold) carrying
+	 *    the current 16-level queue level. The source resumes full rate ONLY if
+	 *    the carried level is below m_onoff_on_level. A high level is NOT used as
+	 *    OFF (OFF is exclusively the CNP path). A received signal takes effect
+	 *    after a jittered NIC processing delay.
 	 *********************/
 	uint64_t m_onoff_t_nic_min, m_onoff_t_nic_max; // NIC processing delay jitter range (ns)
-	void HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested); // OFF via ECN->CNP
-	void OnOffSignal(Ptr<RdmaQueuePair> qp, bool congested);    // latch latest on/off signal
-	void OnOffApply(Ptr<RdmaQueuePair> qp);                     // apply latest state after NIC delay
+	uint32_t m_onoff_on_level;      // BTS -> ON only if carried queue level < this
+	uint64_t m_onoff_off_timeout;   // ns; resume if no CNP for this long while OFF (0=disabled)
+	struct OnOffCtx {
+		bool applied; bool target; bool pending; EventId timeout;
+		OnOffCtx() : applied(false), target(false), pending(false) {}
+	};
+	std::map<uint32_t, OnOffCtx> m_onoffCtx;                          // per-DIP control state
+	std::map<uint32_t, std::vector<Ptr<RdmaQueuePair> > > m_onoffQps; // per-DIP QP list
+	void HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested); // OFF via ECN->CNP (per DIP)
+	void OnOffSignal(uint32_t dip, bool congested);            // latch latest signal for a DIP
+	void OnOffApply(uint32_t dip);                             // apply latest state after NIC delay
+	void OnOffTimeout(uint32_t dip);                           // OFF watchdog -> resume
 	void OnOffBtsOn(uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel); // ON from switch BTS
 	// registry so a SwitchNode can deliver a back-to-sender ON to the source NIC
 	static std::map<uint32_t, Ptr<RdmaHw> > m_rdmaHwMap; // node id -> RdmaHw

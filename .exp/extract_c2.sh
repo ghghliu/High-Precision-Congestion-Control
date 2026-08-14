@@ -3,7 +3,7 @@ set -e
 cd /home/ubuntu/repo/analysis
 make trace_reader >/dev/null 2>&1
 OUT=/home/ubuntu/repo/.exp/out
-RUNS="pfc_C dcqcn_C hpcc_C timely_C onoff_ideal_C onoff_nic4_C onoff_nic4_32_C onoff_nic4_100_C onoff_s1_C onoff_s4_C onoff_s16_C onoff_g4_C onoff_g16_C"
+RUNS="pfc_C dcqcn_C hpcc_C timely_C onoff_ideal_C onoff_nic4_C onoff_nic4_32_C onoff_nic4_100_C onoff_s1_C onoff_s4_C onoff_s16_C onoff_g4_C onoff_g16_C onoff_to64_C onoff_to460_C onoff_lvl2_C onoff_lvl8_C"
 > $OUT/C2_data.csv
 for name in $RUNS; do
   echo "[extract] $name"

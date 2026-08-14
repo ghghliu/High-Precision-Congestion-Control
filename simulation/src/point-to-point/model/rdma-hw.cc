@@ -34,6 +34,16 @@ TypeId RdmaHw::GetTypeId (void)
 				UintegerValue(100000),
 				MakeUintegerAccessor(&RdmaHw::m_onoff_t_nic_max),
 				MakeUintegerChecker<uint64_t>())
+		.AddAttribute("OnOffOnLevel",
+				"On/Off CC: resume full rate only if the back-to-sender queue level is below this (0-16)",
+				UintegerValue(4),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_on_level),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("OnOffOffTimeout",
+				"On/Off CC: resume full rate if no CNP arrives for this long while OFF (ns, 0=disabled)",
+				UintegerValue(128000),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_off_timeout),
+				MakeUintegerChecker<uint64_t>())
 		.AddAttribute("Mtu",
 				"Mtu.",
 				UintegerValue(1000),
@@ -262,9 +272,9 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 	}else if (m_cc_mode == 10){
 		qp->hpccPint.m_curRate = m_bps;
 	}else if (m_cc_mode == 12){
-		qp->onoff.applied = false; // start "on" at full line rate
-		qp->onoff.target = false;
-		qp->onoff.pending = false;
+		// per-DIP control: register this QP under its destination and start "on"
+		m_onoffQps[dip.Get()].push_back(qp);
+		m_onoffCtx[dip.Get()]; // create default ctx if absent (applied=on)
 	}
 
 	// Notify Nic
@@ -632,16 +642,23 @@ void RdmaHw::ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate){
  *****************************/
 std::map<uint32_t, Ptr<RdmaHw> > RdmaHw::m_rdmaHwMap;
 
-// OFF path: driven by ECN mark echoed as CNP in the ACK (guarantees per-flow
-// feedback). We only turn OFF here; ON comes from the switch back-to-sender.
+// OFF path: a CNP (ECN echo) for ANY QP to a DIP throttles ALL QPs to that DIP.
+// While OFF, each CNP refreshes a watchdog; if it expires (no CNP for a while),
+// the source resumes full rate.
 void RdmaHw::HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested){
-	if (congested)
-		OnOffSignal(qp, true);
+	if (!congested)
+		return;
+	uint32_t dip = qp->dip.Get();
+	OnOffSignal(dip, true);
+	OnOffCtx &c = m_onoffCtx[dip];
+	if (c.timeout.IsRunning())
+		Simulator::Cancel(c.timeout);
+	if (m_onoff_off_timeout > 0)
+		c.timeout = Simulator::Schedule(NanoSeconds(m_onoff_off_timeout), &RdmaHw::OnOffTimeout, this, dip);
 }
 
-// ON path: a SwitchNode delivers a back-to-sender notification to this source
-// (already delayed by the switch->source signaling delay). qlevel is carried
-// for future use (e.g. treating a very high level as an OFF signal).
+// ON path: a SwitchNode delivers a rate-limited back-to-sender notification
+// carrying the current queue level. Resume full rate only if the level is low.
 void RdmaHw::DeliverBtsOn(uint32_t srcNodeId, uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel){
 	auto it = m_rdmaHwMap.find(srcNodeId);
 	if (it == m_rdmaHwMap.end())
@@ -650,32 +667,43 @@ void RdmaHw::DeliverBtsOn(uint32_t srcNodeId, uint32_t dip, uint16_t sport, uint
 }
 
 void RdmaHw::OnOffBtsOn(uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel){
-	Ptr<RdmaQueuePair> qp = GetQp(dip, sport, pg);
-	if (qp == NULL)
-		return;
-	OnOffSignal(qp, false); // notification arrival = ON
+	if (qlevel < m_onoff_on_level) // low queue level => resume; high level is ignored (not OFF)
+		OnOffSignal(dip, false);
 }
 
-// Latch the latest on/off signal. The NIC can process one transition at a time;
-// while it is "busy" for the (jittered) processing delay, later signals only
+// Watchdog: OFF held too long without a fresh CNP => congestion cleared => resume.
+void RdmaHw::OnOffTimeout(uint32_t dip){
+	OnOffSignal(dip, false);
+}
+
+// Latch the latest on/off signal for a DIP. The NIC processes one transition at
+// a time; while "busy" for the (jittered) processing delay, later signals only
 // update the target, and the most-recent target is applied when it frees.
-void RdmaHw::OnOffSignal(Ptr<RdmaQueuePair> qp, bool congested){
-	qp->onoff.target = congested;
-	if (!qp->onoff.pending && qp->onoff.target != qp->onoff.applied){
-		qp->onoff.pending = true;
+void RdmaHw::OnOffSignal(uint32_t dip, bool congested){
+	OnOffCtx &c = m_onoffCtx[dip];
+	c.target = congested;
+	if (!c.pending && c.target != c.applied){
+		c.pending = true;
 		uint64_t nic = m_onoff_t_nic_min;
 		if (m_onoff_t_nic_max > m_onoff_t_nic_min)
 			nic += (uint64_t)((double)rand() / RAND_MAX * (m_onoff_t_nic_max - m_onoff_t_nic_min));
-		Simulator::Schedule(NanoSeconds(nic), &RdmaHw::OnOffApply, this, qp);
+		Simulator::Schedule(NanoSeconds(nic), &RdmaHw::OnOffApply, this, dip);
 	}
 }
 
-void RdmaHw::OnOffApply(Ptr<RdmaQueuePair> qp){
-	qp->onoff.pending = false;
-	if (qp->onoff.target != qp->onoff.applied){
-		qp->onoff.applied = qp->onoff.target;
-		ChangeRate(qp, qp->onoff.applied ? m_minRate : qp->m_max_rate);
-	}
+void RdmaHw::OnOffApply(uint32_t dip){
+	OnOffCtx &c = m_onoffCtx[dip];
+	c.pending = false;
+	if (c.target == c.applied)
+		return;
+	c.applied = c.target;
+	std::vector<Ptr<RdmaQueuePair> > &qps = m_onoffQps[dip];
+	DataRate line = qps.empty() ? m_minRate : qps[0]->m_max_rate;
+	DataRate r = c.applied ? m_minRate : line; // apply to ALL QPs to this DIP
+	for (uint32_t i = 0; i < qps.size(); i++)
+		ChangeRate(qps[i], r);
+	if (!c.applied && c.timeout.IsRunning()) // resumed ON => cancel OFF watchdog
+		Simulator::Cancel(c.timeout);
 }
 
 #define PRINT_LOG 0

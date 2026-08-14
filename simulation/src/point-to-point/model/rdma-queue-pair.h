@@ -79,11 +79,6 @@ public:
 		DataRate m_curRate;
 		uint32_t m_incStage;
 	}hpccPint;
-	struct{
-		bool applied;         // currently-applied state (true=off/250Mbps, false=on/line rate)
-		bool target;          // latest received signal state
-		bool pending;         // a NIC-processing apply is in flight
-	}onoff;
 
 	/***********
 	 * methods

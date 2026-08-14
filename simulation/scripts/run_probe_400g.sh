@@ -34,23 +34,19 @@ run_one() {
 }
 
 fail=0
-pids=()
-wait_oldest() {
-  while [ "${#pids[@]}" -ge "$JOBS" ]; do
-    local pid="${pids[0]}"
-    pids=("${pids[@]:1}")
-    wait "$pid" || fail=1
+wait_slot() {
+  while [ "$(jobs -pr | wc -l)" -ge "$JOBS" ]; do
+    wait -n || fail=1
   done
 }
 
 for tag in "${TAGS[@]}"; do
   for cc in "${CCS[@]}"; do
+    wait_slot
     run_one "$cc" "ft_probe_${tag}_flow" &
-    pids+=($!)
-    wait_oldest
   done
 done
-for pid in "${pids[@]}"; do
+for pid in $(jobs -pr); do
   wait "$pid" || fail=1
 done
 

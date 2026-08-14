@@ -30,6 +30,13 @@ with open(HROOT + "/topo.txt", "w") as f:
 def host_of_leaf(L, k):
     return 16 * L + k
 
+# low-delay topology (0.5us links -> ~2us one-way feedback) for the "negligible HW delay" study
+with open(HROOT + "/topo_ld.txt", "w") as f:
+    f.write("%d %d %d\n" % (nnode, nsw, len(links)))
+    f.write(" ".join(str(s) for s in (LEAF + SPINE)) + "\n")
+    for (a, b, bw) in links:
+        f.write("%d %d %s %s 0\n" % (a, b, bw, "0.0005ms"))
+
 # ---------------- Scenario A: convergence (5 long flows -> 1 receiver) ----------------
 rcv = host_of_leaf(0, 0)
 sendersA = [host_of_leaf(1,0), host_of_leaf(1,1), host_of_leaf(2,0), host_of_leaf(2,1), host_of_leaf(3,0)]
@@ -83,7 +90,7 @@ PMAX_ON = "2 400000000000 1.00 3200000000000 1.00"
 TMPL = """ENABLE_QCN {qcn}
 USE_DYNAMIC_PFC_THRESHOLD 1
 PACKET_PAYLOAD_SIZE 1000
-TOPOLOGY_FILE {croot}/topo.txt
+TOPOLOGY_FILE {croot}/{topo}
 FLOW_FILE {croot}/{flow}
 TRACE_FILE {croot}/{trace}
 TRACE_OUTPUT_FILE {out}/mix_{name}.tr
@@ -145,7 +152,7 @@ QLEN_MON_END 2000000001
 """
 
 def write_cfg(name, **kw):
-    d = dict(croot=CROOT, out=OUT_C, int_multi=1, min_rate="1000Mb/s",
+    d = dict(croot=CROOT, out=OUT_C, int_multi=1, min_rate="1000Mb/s", topo="topo.txt",
              t_sense=0, t_sig=0, t_nic_min=0, t_nic_max=0,
              bts_thresh=5000, bts_unit=30000, on_level=4, off_timeout=128000,
              resume_level=2, recent_window=40000, on_confirm=1,
@@ -295,6 +302,24 @@ scheme_cfg("ml_ai_N8",  8, "ml", ml_resume=0, ml_probe=5,  ml_probe_intvl=10000)
 scheme_cfg("ml_ai2_N8", 8, "ml", ml_resume=0, ml_probe=10, ml_probe_intvl=20000); inc_runs.append("ml_ai2_N8")
 scheme_cfg("ml_ai3_N8", 8, "ml", ml_resume=0, ml_probe=5,  ml_probe_intvl=10000, ml_light=75); inc_runs.append("ml_ai3_N8")
 scheme_cfg("ml_ai4_N8", 8, "ml", ml_resume=0, ml_probe=3,  ml_probe_intvl=8000,  ml_light=75); inc_runs.append("ml_ai4_N8")
+
+# ---- Low-delay regime: ~2us one-way feedback (0.5us links) + NIC fixed 2us ----
+# How good can ON/OFF get when the hardware delays are negligible?
+KMIN_TIGHT = "2 400000000000 20 3200000000000 20"   # Klow=20KB
+KMAX_TIGHT = "2 400000000000 80 3200000000000 80"   # Khigh=80KB
+ld_runs=[]
+for N in (2, 8, 32):
+    for sch in ("dcqcn","hpcc","de","ml"):
+        nm="%s_ld_N%d"%(sch,N)
+        if sch in ("de","ml"):
+            scheme_cfg(nm, N, sch, topo="topo_ld.txt", t_nic_min=2000, t_nic_max=2000)
+        else:
+            scheme_cfg(nm, N, sch, topo="topo_ld.txt")
+        ld_runs.append(nm)
+# watermark re-tune under low delay (smaller overshoot -> tighter watermarks)
+scheme_cfg("de_ld_tight_N8", 8, "de", topo="topo_ld.txt", t_nic_min=2000, t_nic_max=2000, kmin=KMIN_TIGHT, kmax=KMAX_TIGHT); ld_runs.append("de_ld_tight_N8")
+scheme_cfg("ml_ld_tight_N8", 8, "ml", topo="topo_ld.txt", t_nic_min=2000, t_nic_max=2000, kmin=KMIN_TIGHT, kmax=KMAX_TIGHT); ld_runs.append("ml_ld_tight_N8")
+scheme_cfg("ml_ld_tight_N32", 32, "ml", topo="topo_ld.txt", t_nic_min=2000, t_nic_max=2000, kmin=KMIN_TIGHT, kmax=KMAX_TIGHT); ld_runs.append("ml_ld_tight_N32")
 print("topology: %d nodes, %d links" % (nnode, len(links)))
 print("dual-ECN(mode13) configs: %s" % ", ".join("de_%s_C" % r for r in de_runs))
 print("incast comparison configs: %s" % ", ".join(inc_runs))

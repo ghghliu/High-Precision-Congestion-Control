@@ -2,7 +2,7 @@
 set -e
 cd /home/ubuntu/repo/simulation
 OUT=/home/ubuntu/repo/.exp/out
-NEW="ml_ai_N8 ml_ai2_N8 ml_ai3_N8 ml_ai4_N8"
+NEW="dcqcn_ld_N2 hpcc_ld_N2 de_ld_N2 ml_ld_N2 dcqcn_ld_N8 hpcc_ld_N8 de_ld_N8 ml_ld_N8 dcqcn_ld_N32 hpcc_ld_N32 de_ld_N32 ml_ld_N32 de_ld_tight_N8 ml_ld_tight_N8 ml_ld_tight_N32"
 for name in $NEW; do
   echo "[run] $name"; ./waf --run "scratch/third /home/ubuntu/repo/.exp/config_${name}.txt" >$OUT/log_${name}.txt 2>&1
 done

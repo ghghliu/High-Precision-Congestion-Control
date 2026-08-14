@@ -34,6 +34,7 @@ The topology always has 64 NICs so the fabric is 1:1. Workloads use a few racks/
 | `ft_outcast4` / `ft_outcast8` | N:1 incast + **same-NIC** victim to another dest | **PFC outcast**: victim throttled to ~1/N |
 | `ft_incast8` | 8:1 onto one dest | **DCQCN slow recovery** after CNP, bottleneck left idle |
 | `ft_incast16` | 16:1 | Same, larger incast degree (trend) |
+| `ft_probe_{32k..20m}` | 8:1 incast already running + mouse joins same dest | **CC under-throughput vs size**: sub-RTT mice finish before CNP; few-RTT mice cut and finish unconverged; large mice recover |
 
 ## Outcast (source HoL)
 
@@ -50,8 +51,15 @@ Run just this case:
 cd simulation
 bash scripts/run_outcast_400g.sh
 ```
-| `ft_incast8` | 8:1 onto one dest | **DCQCN slow recovery** after CNP, bottleneck left idle |
-| `ft_incast16` | 16:1 | Same, larger incast degree (trend) |
+
+Mouse joining an already-running incast (size sweep, FCT / slowdown / PFC / CC rate):
+
+```bash
+cd simulation
+bash scripts/run_probe_400g.sh
+```
+
+See `docs/probe_results_400g.md`.
 
 ## Expected signatures
 

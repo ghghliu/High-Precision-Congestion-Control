@@ -7,6 +7,7 @@
 #include <ns3/custom-header.h>
 #include "qbb-net-device.h"
 #include <unordered_map>
+#include <map>
 #include "pint.h"
 
 namespace ns3 {
@@ -150,6 +151,51 @@ public:
 	void SetPintSmplThresh(double p);
 	void HandleAckHpPint(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch);
 	void UpdateRateHpPint(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch, bool fast_react);
+
+	/**********************
+	 * On/Off CC (mode 12) -- controlled per destination IP (DIP), not per QP.
+	 * Binary rate: full line rate (on) or a fixed low rate (m_minRate, e.g. 250Mbps).
+	 *  - OFF: switch marks ECN when the egress queue exceeds a threshold; the
+	 *    receiver echoes it as CNP in the ACK. Any CNP for a DIP throttles ALL
+	 *    QPs to that DIP. While OFF, if no CNP arrives for m_onoff_off_timeout,
+	 *    the source exits OFF and resumes full rate (avoids the stuck-OFF
+	 *    deadlock when congestion clears and no notification is generated).
+	 *  - ON : the switch sends a rate-limited "back to sender" notification
+	 *    (triggered when a packet's queuing delay exceeds a threshold) carrying
+	 *    the current 16-level queue level. The source resumes full rate ONLY if
+	 *    the carried level is below m_onoff_on_level. A high level is NOT used as
+	 *    OFF (OFF is exclusively the CNP path). A received signal takes effect
+	 *    after a jittered NIC processing delay.
+	 *********************/
+	uint64_t m_onoff_t_nic_min, m_onoff_t_nic_max; // NIC processing delay jitter range (ns)
+	uint32_t m_onoff_on_level;      // BTS -> ON only if carried queue level < this
+	uint64_t m_onoff_off_timeout;   // ns; resume if no CNP for this long while OFF (0=disabled)
+	uint32_t m_onoff_on_confirm;    // dual-ECN: # consecutive unmarked ACKs (queue<Klow) before ON
+	// multi-level (mode 14): light decrease factor, resume floor, probe step/interval (percent, ns)
+	uint32_t m_ml_light_pct;   // light decrease: R <- R * light_pct/100 (on 01)
+	uint32_t m_ml_resume_pct;  // fast-recovery floor as % of line (on first unmarked)
+	uint32_t m_ml_probe_pct;   // additive probe step as % of line (on sustained unmarked)
+	uint64_t m_ml_probe_intvl; // ns between probe steps
+	struct OnOffCtx {
+		bool applied; bool target; bool pending; EventId timeout; uint32_t unmarked;
+		DataRate tgtRate, appRate; bool ratePending; EventId probe; // mode 14 (multi-level)
+		OnOffCtx() : applied(false), target(false), pending(false), unmarked(0), ratePending(false) {}
+	};
+	std::map<uint32_t, OnOffCtx> m_onoffCtx;                          // per-DIP control state
+	std::map<uint32_t, std::vector<Ptr<RdmaQueuePair> > > m_onoffQps; // per-DIP QP list
+	void HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested); // OFF via ECN->CNP (per DIP)
+	void HandleAckDualEcn(Ptr<RdmaQueuePair> qp, bool high, bool low); // dual-watermark on/off (mode 13)
+	void HandleAckMultiLevel(Ptr<RdmaQueuePair> qp, bool high, bool low); // multi-level rate (mode 14)
+	void OnOffSetRate(uint32_t dip, DataRate rate);   // schedule a rate change after NIC delay
+	void OnOffApplyRate(uint32_t dip);                // apply latest target rate to all QPs to DIP
+	void OnOffProbe(uint32_t dip);                    // additive probe upward while uncongested
+	void OnOffSignal(uint32_t dip, bool congested);            // latch latest signal for a DIP
+	void OnOffApply(uint32_t dip);                             // apply latest state after NIC delay
+	void OnOffTimeout(uint32_t dip);                           // OFF watchdog -> resume
+	void OnOffBtsOn(uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel); // ON from switch BTS
+	// registry so a SwitchNode can deliver a back-to-sender ON to the source NIC
+	static std::map<uint32_t, Ptr<RdmaHw> > m_rdmaHwMap; // node id -> RdmaHw
+	static void DeliverBtsOn(uint32_t srcNodeId, uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel);
 };
 
 } /* namespace ns3 */

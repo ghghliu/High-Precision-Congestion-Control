@@ -24,7 +24,8 @@ class qbbHeader : public Header
 public:
  
   enum {
-	  FLAG_CNP = 0
+	  FLAG_CNP = 0,
+	  FLAG_ECNLOW = 1   // dual-watermark on/off: queue in [Klow, Khigh) (ECN 01)
   };
   qbbHeader (uint16_t pg);
   qbbHeader ();
@@ -40,6 +41,7 @@ public:
   void SetDport(uint32_t _dport);
   void SetTs(uint64_t ts);
   void SetCnp();
+  void SetEcnLow();
   void SetIntHeader(const IntHeader &_ih);
 
 //Getters

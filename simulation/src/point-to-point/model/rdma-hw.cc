@@ -24,6 +24,51 @@ TypeId RdmaHw::GetTypeId (void)
 				DataRateValue(DataRate("100Mb/s")),
 				MakeDataRateAccessor(&RdmaHw::m_minRate),
 				MakeDataRateChecker())
+		.AddAttribute("OnOffTNicMin",
+				"On/Off CC: minimum NIC processing delay (ns)",
+				UintegerValue(16000),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_t_nic_min),
+				MakeUintegerChecker<uint64_t>())
+		.AddAttribute("OnOffTNicMax",
+				"On/Off CC: maximum NIC processing delay (ns)",
+				UintegerValue(100000),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_t_nic_max),
+				MakeUintegerChecker<uint64_t>())
+		.AddAttribute("OnOffOnLevel",
+				"On/Off CC: resume full rate only if the back-to-sender queue level is below this (0-16)",
+				UintegerValue(4),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_on_level),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("OnOffOffTimeout",
+				"On/Off CC: resume full rate if no CNP arrives for this long while OFF (ns, 0=disabled)",
+				UintegerValue(128000),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_off_timeout),
+				MakeUintegerChecker<uint64_t>())
+		.AddAttribute("OnOffOnConfirm",
+				"On/Off dual-ECN: consecutive unmarked ACKs (queue<Klow) required before resuming",
+				UintegerValue(1),
+				MakeUintegerAccessor(&RdmaHw::m_onoff_on_confirm),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("MlLightPct",
+				"Multi-level (mode14): light decrease multiplier on 01, as percent (e.g. 50 = x0.5)",
+				UintegerValue(50),
+				MakeUintegerAccessor(&RdmaHw::m_ml_light_pct),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("MlResumePct",
+				"Multi-level (mode14): fast-recovery floor on first unmarked, as percent of line rate",
+				UintegerValue(50),
+				MakeUintegerAccessor(&RdmaHw::m_ml_resume_pct),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("MlProbePct",
+				"Multi-level (mode14): additive probe step while uncongested, as percent of line rate",
+				UintegerValue(25),
+				MakeUintegerAccessor(&RdmaHw::m_ml_probe_pct),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("MlProbeInterval",
+				"Multi-level (mode14): ns between probe steps",
+				UintegerValue(40000),
+				MakeUintegerAccessor(&RdmaHw::m_ml_probe_intvl),
+				MakeUintegerChecker<uint64_t>())
 		.AddAttribute("Mtu",
 				"Mtu.",
 				UintegerValue(1000),
@@ -251,6 +296,11 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 		qp->tmly.m_curRate = m_bps;
 	}else if (m_cc_mode == 10){
 		qp->hpccPint.m_curRate = m_bps;
+	}else if (m_cc_mode == 12 || m_cc_mode == 13 || m_cc_mode == 14){
+		// per-DIP control: register this QP under its destination and start "on"
+		m_onoffQps[dip.Get()].push_back(qp);
+		OnOffCtx &c = m_onoffCtx[dip.Get()]; // create default ctx if absent (applied=on)
+		c.tgtRate = c.appRate = m_bps;       // mode 14 starts at line rate
 	}
 
 	// Notify Nic
@@ -318,8 +368,14 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch){
 		seqh.SetSport(ch.udp.dport);
 		seqh.SetDport(ch.udp.sport);
 		seqh.SetIntHeader(ch.udp.ih);
-		if (ecnbits)
+		if (m_cc_mode == 13 || m_cc_mode == 14){ // dual-watermark: reflect high (CE/11) and low (ECT1/01)
+			if (ecnbits == 0x03)
+				seqh.SetCnp();
+			else if (ecnbits == 0x01)
+				seqh.SetEcnLow();
+		}else if (ecnbits){
 			seqh.SetCnp();
+		}
 
 		Ptr<Packet> newp = Create<Packet>(std::max(60-14-20-(int)seqh.GetSerializedSize(), 0));
 		newp->AddHeader(seqh);
@@ -431,6 +487,14 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch){
 		HandleAckDctcp(qp, p, ch);
 	}else if (m_cc_mode == 10){
 		HandleAckHpPint(qp, p, ch);
+	}else if (m_cc_mode == 12){
+		HandleAckOnOff(qp, cnp != 0);
+	}else if (m_cc_mode == 13){
+		uint8_t ecnlow = (ch.ack.flags >> qbbHeader::FLAG_ECNLOW) & 1;
+		HandleAckDualEcn(qp, cnp != 0, ecnlow != 0);
+	}else if (m_cc_mode == 14){
+		uint8_t ecnlow = (ch.ack.flags >> qbbHeader::FLAG_ECNLOW) & 1;
+		HandleAckMultiLevel(qp, cnp != 0, ecnlow != 0);
 	}
 	// ACK may advance the on-the-fly window, allowing more packets to send
 	dev->TriggerTransmit();
@@ -609,6 +673,163 @@ void RdmaHw::ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate){
 
 	// change to new rate
 	qp->m_rate = new_rate;
+}
+
+/******************************
+ * On/Off CC (mode 12)
+ *****************************/
+std::map<uint32_t, Ptr<RdmaHw> > RdmaHw::m_rdmaHwMap;
+
+// OFF path: a CNP (ECN echo) for ANY QP to a DIP throttles ALL QPs to that DIP.
+// While OFF, each CNP refreshes a watchdog; if it expires (no CNP for a while),
+// the source resumes full rate.
+void RdmaHw::HandleAckOnOff(Ptr<RdmaQueuePair> qp, bool congested){
+	if (!congested)
+		return;
+	uint32_t dip = qp->dip.Get();
+	OnOffSignal(dip, true);
+	OnOffCtx &c = m_onoffCtx[dip];
+	if (c.timeout.IsRunning())
+		Simulator::Cancel(c.timeout);
+	if (m_onoff_off_timeout > 0)
+		c.timeout = Simulator::Schedule(NanoSeconds(m_onoff_off_timeout), &RdmaHw::OnOffTimeout, this, dip);
+}
+
+// Dual-watermark on/off (mode 13), all on the guaranteed per-flow ACK path:
+//   high (CE/11, queue>Khigh)      -> OFF (throttle), refresh backstop watchdog
+//   low  (ECT1/01, Klow<=q<Khigh)  -> HOLD (hysteresis band)
+//   none (unmarked, q<Klow)        -> ON after m_onoff_on_confirm consecutive unmarked
+// A throttled flow still receives an ACK per packet it sends, so an unmarked ACK
+// (queue drained below Klow) is itself the resume signal -> no switch flow tracking.
+void RdmaHw::HandleAckDualEcn(Ptr<RdmaQueuePair> qp, bool high, bool low){
+	uint32_t dip = qp->dip.Get();
+	OnOffCtx &c = m_onoffCtx[dip];
+	if (high){
+		c.unmarked = 0;
+		OnOffSignal(dip, true);
+		if (c.timeout.IsRunning())
+			Simulator::Cancel(c.timeout);
+		if (m_onoff_off_timeout > 0)
+			c.timeout = Simulator::Schedule(NanoSeconds(m_onoff_off_timeout), &RdmaHw::OnOffTimeout, this, dip);
+	}else if (low){
+		c.unmarked = 0; // hysteresis band: hold current state
+	}else{
+		if (++c.unmarked >= m_onoff_on_confirm)
+			OnOffSignal(dip, false);
+	}
+}
+
+// Multi-level rate control (mode 14) on the dual-watermark ACK path:
+//   high (11, q>Khigh)    -> heavy decrease to R_min (250Mbps): guarantees drain for any N
+//   low  (01, Klow<=q<Kh) -> light multiplicative decrease R <- R * MlLightPct/100
+//   none (unmarked, q<Klow) -> fast-recover to MlResumePct% of line (default 50%); once there,
+//                              additively probe up by MlProbePct% every MlProbeInterval while clean.
+void RdmaHw::HandleAckMultiLevel(Ptr<RdmaQueuePair> qp, bool high, bool low){
+	uint32_t dip = qp->dip.Get();
+	OnOffCtx &c = m_onoffCtx[dip];
+	std::vector<Ptr<RdmaQueuePair> > &qps = m_onoffQps[dip];
+	DataRate line = qps.empty() ? m_minRate : qps[0]->m_max_rate;
+	if (high){
+		if (c.probe.IsRunning()) Simulator::Cancel(c.probe);
+		OnOffSetRate(dip, m_minRate);
+	}else if (low){
+		if (c.probe.IsRunning()) Simulator::Cancel(c.probe);
+		uint64_t nr = c.tgtRate.GetBitRate() * m_ml_light_pct / 100;
+		if (nr < m_minRate.GetBitRate()) nr = m_minRate.GetBitRate();
+		OnOffSetRate(dip, DataRate(nr));
+	}else{ // unmarked: queue < Klow
+		uint64_t floor = line.GetBitRate() * m_ml_resume_pct / 100;
+		if (c.tgtRate.GetBitRate() < floor){
+			OnOffSetRate(dip, DataRate(floor)); // fast recovery to the safe floor
+		}else if (c.tgtRate.GetBitRate() < line.GetBitRate() && !c.probe.IsRunning()){
+			c.probe = Simulator::Schedule(NanoSeconds(m_ml_probe_intvl), &RdmaHw::OnOffProbe, this, dip);
+		}
+	}
+}
+
+void RdmaHw::OnOffProbe(uint32_t dip){
+	OnOffCtx &c = m_onoffCtx[dip];
+	std::vector<Ptr<RdmaQueuePair> > &qps = m_onoffQps[dip];
+	if (qps.empty()) return;
+	DataRate line = qps[0]->m_max_rate;
+	uint64_t step = line.GetBitRate() * m_ml_probe_pct / 100;
+	uint64_t nr = c.tgtRate.GetBitRate() + step;
+	if (nr > line.GetBitRate()) nr = line.GetBitRate();
+	OnOffSetRate(dip, DataRate(nr));
+	if (nr < line.GetBitRate()) // keep probing upward while uncongested
+		c.probe = Simulator::Schedule(NanoSeconds(m_ml_probe_intvl), &RdmaHw::OnOffProbe, this, dip);
+}
+
+void RdmaHw::OnOffSetRate(uint32_t dip, DataRate rate){
+	OnOffCtx &c = m_onoffCtx[dip];
+	c.tgtRate = rate;
+	if (!c.ratePending && c.tgtRate.GetBitRate() != c.appRate.GetBitRate()){
+		c.ratePending = true;
+		uint64_t nic = m_onoff_t_nic_min;
+		if (m_onoff_t_nic_max > m_onoff_t_nic_min)
+			nic += (uint64_t)((double)rand() / RAND_MAX * (m_onoff_t_nic_max - m_onoff_t_nic_min));
+		Simulator::Schedule(NanoSeconds(nic), &RdmaHw::OnOffApplyRate, this, dip);
+	}
+}
+
+void RdmaHw::OnOffApplyRate(uint32_t dip){
+	OnOffCtx &c = m_onoffCtx[dip];
+	c.ratePending = false;
+	if (c.tgtRate.GetBitRate() == c.appRate.GetBitRate())
+		return;
+	c.appRate = c.tgtRate;
+	std::vector<Ptr<RdmaQueuePair> > &qps = m_onoffQps[dip];
+	for (uint32_t i = 0; i < qps.size(); i++)
+		ChangeRate(qps[i], c.appRate);
+}
+
+// ON path: a SwitchNode delivers a rate-limited back-to-sender notification
+// carrying the current queue level. Resume full rate only if the level is low.
+void RdmaHw::DeliverBtsOn(uint32_t srcNodeId, uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel){
+	auto it = m_rdmaHwMap.find(srcNodeId);
+	if (it == m_rdmaHwMap.end())
+		return;
+	it->second->OnOffBtsOn(dip, sport, pg, qlevel);
+}
+
+void RdmaHw::OnOffBtsOn(uint32_t dip, uint16_t sport, uint16_t pg, uint32_t qlevel){
+	if (qlevel < m_onoff_on_level) // low queue level => resume; high level is ignored (not OFF)
+		OnOffSignal(dip, false);
+}
+
+// Watchdog: OFF held too long without a fresh CNP => congestion cleared => resume.
+void RdmaHw::OnOffTimeout(uint32_t dip){
+	OnOffSignal(dip, false);
+}
+
+// Latch the latest on/off signal for a DIP. The NIC processes one transition at
+// a time; while "busy" for the (jittered) processing delay, later signals only
+// update the target, and the most-recent target is applied when it frees.
+void RdmaHw::OnOffSignal(uint32_t dip, bool congested){
+	OnOffCtx &c = m_onoffCtx[dip];
+	c.target = congested;
+	if (!c.pending && c.target != c.applied){
+		c.pending = true;
+		uint64_t nic = m_onoff_t_nic_min;
+		if (m_onoff_t_nic_max > m_onoff_t_nic_min)
+			nic += (uint64_t)((double)rand() / RAND_MAX * (m_onoff_t_nic_max - m_onoff_t_nic_min));
+		Simulator::Schedule(NanoSeconds(nic), &RdmaHw::OnOffApply, this, dip);
+	}
+}
+
+void RdmaHw::OnOffApply(uint32_t dip){
+	OnOffCtx &c = m_onoffCtx[dip];
+	c.pending = false;
+	if (c.target == c.applied)
+		return;
+	c.applied = c.target;
+	std::vector<Ptr<RdmaQueuePair> > &qps = m_onoffQps[dip];
+	DataRate line = qps.empty() ? m_minRate : qps[0]->m_max_rate;
+	DataRate r = c.applied ? m_minRate : line; // apply to ALL QPs to this DIP
+	for (uint32_t i = 0; i < qps.size(); i++)
+		ChangeRate(qps[i], r);
+	if (!c.applied && c.timeout.IsRunning()) // resumed ON => cancel OFF watchdog
+		Simulator::Cancel(c.timeout);
 }
 
 #define PRINT_LOG 0

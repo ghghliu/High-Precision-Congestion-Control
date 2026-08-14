@@ -290,6 +290,11 @@ scheme_cfg("ml_l25_N8", 8, "ml", ml_light=25); inc_runs.append("ml_l25_N8")
 scheme_cfg("ml_r25_N8", 8, "ml", ml_resume=25); inc_runs.append("ml_r25_N8")
 scheme_cfg("ml_r100_N8", 8, "ml", ml_resume=100); inc_runs.append("ml_r100_N8")  # resume straight to 100%
 scheme_cfg("ml_p50_N8", 8, "ml", ml_probe=50); inc_runs.append("ml_p50_N8")
+# finer, DCQCN-like control: no 50% jump, additive increase from R_min
+scheme_cfg("ml_ai_N8",  8, "ml", ml_resume=0, ml_probe=5,  ml_probe_intvl=10000); inc_runs.append("ml_ai_N8")
+scheme_cfg("ml_ai2_N8", 8, "ml", ml_resume=0, ml_probe=10, ml_probe_intvl=20000); inc_runs.append("ml_ai2_N8")
+scheme_cfg("ml_ai3_N8", 8, "ml", ml_resume=0, ml_probe=5,  ml_probe_intvl=10000, ml_light=75); inc_runs.append("ml_ai3_N8")
+scheme_cfg("ml_ai4_N8", 8, "ml", ml_resume=0, ml_probe=3,  ml_probe_intvl=8000,  ml_light=75); inc_runs.append("ml_ai4_N8")
 print("topology: %d nodes, %d links" % (nnode, len(links)))
 print("dual-ECN(mode13) configs: %s" % ", ".join("de_%s_C" % r for r in de_runs))
 print("incast comparison configs: %s" % ", ".join(inc_runs))

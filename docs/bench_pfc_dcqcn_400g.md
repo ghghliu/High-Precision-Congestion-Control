@@ -53,9 +53,9 @@ Flows (`bench_sf_flow.txt`):
 | Flow | Size | Start | Role |
 |------|------|-------|------|
 | 0..6 → 7 | 5MB ×7 | 2.0s | 7:1 incast (forces CNP / PFC) |
-| 0 → 7 :107 | 200KB | 2.002s | late probe while rates are recovering |
+| 0 → 7 :107 | 200KB | 2.0002s | probe during incast (PFC HoL vs DCQCN rate state) |
 
-Expected: DCQCN AI=80Mb/s @400G recovers slowly after CNP → probe/incast slowdown and lower aggregate goodput during recovery vs ideal; PFC-only shows pause storms instead.
+Expected: DCQCN AI=80Mb/s @400G recovers slowly after CNP → incast cohort under-utilizes the 400G link; PFC-only keeps utilization high but pause-blocks the probe (HoL). See `docs/bench_results_400g.md`.
 
 ## Outputs
 

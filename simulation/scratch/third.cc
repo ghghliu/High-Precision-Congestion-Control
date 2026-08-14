@@ -104,7 +104,7 @@ struct Interface{
 
 	Interface() : idx(0), up(false){}
 };
-map<Ptr<Node>, map<Ptr<Node>, Interface> > nbr2if;
+map<Ptr<Node>, map<Ptr<Node>, vector<Interface> > > nbr2if;
 // Mapping destination to next hop for each node: <node, <dest, <nexthop0, ...> > >
 map<Ptr<Node>, map<Ptr<Node>, vector<Ptr<Node> > > > nextHop;
 map<Ptr<Node>, map<Ptr<Node>, uint64_t> > pairDelay;
@@ -239,16 +239,23 @@ void CalculateRoute(Ptr<Node> host){
 		Ptr<Node> now = q[i];
 		int d = dis[now];
 		for (auto it = nbr2if[now].begin(); it != nbr2if[now].end(); it++){
-			// skip down link
-			if (!it->second.up)
-				continue;
 			Ptr<Node> next = it->first;
+			// pick first live parallel link to this neighbor
+			const Interface *ifc = NULL;
+			for (size_t li = 0; li < it->second.size(); li++){
+				if (it->second[li].up){
+					ifc = &it->second[li];
+					break;
+				}
+			}
+			if (!ifc)
+				continue;
 			// If 'next' have not been visited.
 			if (dis.find(next) == dis.end()){
 				dis[next] = d + 1;
-				delay[next] = delay[now] + it->second.delay;
-				txDelay[next] = txDelay[now] + packet_payload_size * 1000000000lu * 8 / it->second.bw;
-				bw[next] = std::min(bw[now], it->second.bw);
+				delay[next] = delay[now] + ifc->delay;
+				txDelay[next] = txDelay[now] + packet_payload_size * 1000000000lu * 8 / ifc->bw;
+				bw[next] = std::min(bw[now], ifc->bw);
 				// we only enqueue switch, because we do not want packets to go through host as middle point
 				if (next->GetNodeType() == 1)
 					q.push_back(next);
@@ -289,11 +296,16 @@ void SetRoutingEntries(){
 			vector<Ptr<Node> > nexts = j->second;
 			for (int k = 0; k < (int)nexts.size(); k++){
 				Ptr<Node> next = nexts[k];
-				uint32_t interface = nbr2if[node][next].idx;
-				if (node->GetNodeType() == 1)
-					DynamicCast<SwitchNode>(node)->AddTableEntry(dstAddr, interface);
-				else{
-					node->GetObject<RdmaDriver>()->m_rdma->AddTableEntry(dstAddr, interface);
+				vector<Interface> &ifaces = nbr2if[node][next];
+				for (size_t li = 0; li < ifaces.size(); li++){
+					if (!ifaces[li].up)
+						continue;
+					uint32_t interface = ifaces[li].idx;
+					if (node->GetNodeType() == 1)
+						DynamicCast<SwitchNode>(node)->AddTableEntry(dstAddr, interface);
+					else{
+						node->GetObject<RdmaDriver>()->m_rdma->AddTableEntry(dstAddr, interface);
+					}
 				}
 			}
 		}
@@ -302,10 +314,19 @@ void SetRoutingEntries(){
 
 // take down the link between a and b, and redo the routing
 void TakeDownLink(NodeContainer n, Ptr<Node> a, Ptr<Node> b){
-	if (!nbr2if[a][b].up)
+	if (nbr2if[a][b].empty())
 		return;
-	// take down link between a and b
-	nbr2if[a][b].up = nbr2if[b][a].up = false;
+	bool any_up = false;
+	for (size_t li = 0; li < nbr2if[a][b].size(); li++)
+		if (nbr2if[a][b][li].up)
+			any_up = true;
+	if (!any_up)
+		return;
+	// take down all parallel links between a and b
+	for (size_t li = 0; li < nbr2if[a][b].size(); li++)
+		nbr2if[a][b][li].up = false;
+	for (size_t li = 0; li < nbr2if[b][a].size(); li++)
+		nbr2if[b][a][li].up = false;
 	nextHop.clear();
 	CalculateRoutes(n);
 	// clear routing tables
@@ -315,8 +336,10 @@ void TakeDownLink(NodeContainer n, Ptr<Node> a, Ptr<Node> b){
 		else
 			n.Get(i)->GetObject<RdmaDriver>()->m_rdma->ClearTable();
 	}
-	DynamicCast<QbbNetDevice>(a->GetDevice(nbr2if[a][b].idx))->TakeDown();
-	DynamicCast<QbbNetDevice>(b->GetDevice(nbr2if[b][a].idx))->TakeDown();
+	for (size_t li = 0; li < nbr2if[a][b].size(); li++)
+		DynamicCast<QbbNetDevice>(a->GetDevice(nbr2if[a][b][li].idx))->TakeDown();
+	for (size_t li = 0; li < nbr2if[b][a].size(); li++)
+		DynamicCast<QbbNetDevice>(b->GetDevice(nbr2if[b][a][li].idx))->TakeDown();
 	// reset routing table
 	SetRoutingEntries();
 
@@ -796,14 +819,17 @@ int main(int argc, char *argv[])
 		}
 
 		// used to create a graph of the topology
-		nbr2if[snode][dnode].idx = DynamicCast<QbbNetDevice>(d.Get(0))->GetIfIndex();
-		nbr2if[snode][dnode].up = true;
-		nbr2if[snode][dnode].delay = DynamicCast<QbbChannel>(DynamicCast<QbbNetDevice>(d.Get(0))->GetChannel())->GetDelay().GetTimeStep();
-		nbr2if[snode][dnode].bw = DynamicCast<QbbNetDevice>(d.Get(0))->GetDataRate().GetBitRate();
-		nbr2if[dnode][snode].idx = DynamicCast<QbbNetDevice>(d.Get(1))->GetIfIndex();
-		nbr2if[dnode][snode].up = true;
-		nbr2if[dnode][snode].delay = DynamicCast<QbbChannel>(DynamicCast<QbbNetDevice>(d.Get(1))->GetChannel())->GetDelay().GetTimeStep();
-		nbr2if[dnode][snode].bw = DynamicCast<QbbNetDevice>(d.Get(1))->GetDataRate().GetBitRate();
+		Interface if_sd, if_ds;
+		if_sd.idx = DynamicCast<QbbNetDevice>(d.Get(0))->GetIfIndex();
+		if_sd.up = true;
+		if_sd.delay = DynamicCast<QbbChannel>(DynamicCast<QbbNetDevice>(d.Get(0))->GetChannel())->GetDelay().GetTimeStep();
+		if_sd.bw = DynamicCast<QbbNetDevice>(d.Get(0))->GetDataRate().GetBitRate();
+		if_ds.idx = DynamicCast<QbbNetDevice>(d.Get(1))->GetIfIndex();
+		if_ds.up = true;
+		if_ds.delay = DynamicCast<QbbChannel>(DynamicCast<QbbNetDevice>(d.Get(1))->GetChannel())->GetDelay().GetTimeStep();
+		if_ds.bw = DynamicCast<QbbNetDevice>(d.Get(1))->GetDataRate().GetBitRate();
+		nbr2if[snode][dnode].push_back(if_sd);
+		nbr2if[dnode][snode].push_back(if_ds);
 
 		// This is just to set up the connectivity between nodes. The IP addresses are useless
 		char ipstring[16];
@@ -965,9 +991,11 @@ int main(int argc, char *argv[])
 		for (auto i: nbr2if){
 			for (auto j : i.second){
 				uint16_t node = i.first->GetId();
-				uint8_t intf = j.second.idx;
-				uint64_t bps = DynamicCast<QbbNetDevice>(i.first->GetDevice(j.second.idx))->GetDataRate().GetBitRate();
-				sim_setting.port_speed[node][intf] = bps;
+				for (size_t li = 0; li < j.second.size(); li++){
+					uint8_t intf = j.second[li].idx;
+					uint64_t bps = DynamicCast<QbbNetDevice>(i.first->GetDevice(j.second[li].idx))->GetDataRate().GetBitRate();
+					sim_setting.port_speed[node][intf] = bps;
+				}
 			}
 		}
 		sim_setting.win = maxBdp;

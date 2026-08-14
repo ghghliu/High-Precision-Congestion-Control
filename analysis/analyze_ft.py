@@ -142,18 +142,24 @@ def analyze_hol(mix: str, topo: str, ccs: List[str]) -> None:
         fct, pfc = paths(mix, topo, "ft_hol_flow", cc)
         rows = load_fct(fct)
         print("\n-- %s --" % cc)
-        victim = [r for r in rows if r["dport"] == 100]
-        incast = [r for r in rows if r["dport"] != 100]
-        summarize(victim, "victim")
+        victim = [r for r in rows if r["dport"] < 200]
+        incast = [r for r in rows if r["dport"] >= 200]
+        summarize(victim, "victim probes")
         summarize(incast, "incast")
         ps = pfc_stats(load_pfc(pfc))
         print("  PFC pause=%d by_node=%s" % (ps["pause_events"], ps["pause_by_node"]))
         if victim:
-            v = victim[0]
+            slows = [r["fct_ns"] / max(r["standalone_ns"], 1) for r in victim]
             print(
-                "  victim slowdown=%.2fx fct_us=%.1f standalone_us=%.1f"
-                % (v["fct_ns"] / max(v["standalone_ns"], 1), v["fct_ns"] / 1e3, v["standalone_ns"] / 1e3)
+                "  victim slowdown min/med/max=%.2f/%.2f/%.2f"
+                % (min(slows), pct(slows, 0.5), max(slows))
             )
+            for r in victim:
+                gp = r["size"] * 8.0 / max(r["fct_ns"], 1) / 1e-9 / 1e9
+                print(
+                    "    dport=%d slowdown=%.2fx goodput=%.1fGbps fct_us=%.1f"
+                    % (r["dport"], r["fct_ns"] / max(r["standalone_ns"], 1), gp, r["fct_ns"] / 1e3)
+                )
         cohort_util(incast)
 
 
@@ -169,6 +175,35 @@ def analyze_incast(mix: str, topo: str, trace: str, n: int, ccs: List[str]) -> N
         cohort_util(rows)
 
 
+def analyze_outcast(mix: str, topo: str, n: int, ccs: List[str]) -> None:
+    print("\n=== outcast%d: N:1 incast + co-located victim on sender 0 ===" % n)
+    fair = 400.0 / n
+    for cc in ccs:
+        fct, pfc = paths(mix, topo, "ft_outcast%d_flow" % n, cc)
+        rows = load_fct(fct)
+        print("\n-- %s --" % cc)
+        victim = [r for r in rows if r["dport"] == 100]
+        incast = [r for r in rows if r["dport"] >= 200]
+        summarize(victim, "victim 0->V")
+        summarize(incast, "incast ->C")
+        ps = pfc_stats(load_pfc(pfc))
+        print(
+            "  PFC pause=%d on_src0=%d by_node=%s"
+            % (ps["pause_events"], ps["pause_by_node"].get(0, 0), ps["pause_by_node"])
+        )
+        if victim:
+            v = victim[0]
+            gp = v["size"] * 8.0 / max(v["fct_ns"], 1) / 1e-9 / 1e9
+            print(
+                "  victim goodput=%.1fGbps  fair_1/N=%.1fGbps  ratio_vs_1N=%.2f  slowdown=%.2fx"
+                % (gp, fair, gp / fair, v["fct_ns"] / max(v["standalone_ns"], 1))
+            )
+        if incast:
+            gps = [r["size"] * 8.0 / max(r["fct_ns"], 1) / 1e-9 / 1e9 for r in incast]
+            print("  incast per-flow avg_goodput=%.1fGbps (expect ~%.1f if 1/N)" % (sum(gps) / len(gps), fair))
+        cohort_util(incast)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mix", default="../simulation/mix")
@@ -180,6 +215,8 @@ def main() -> None:
     analyze_hol(args.mix, args.topo, ccs)
     analyze_incast(args.mix, args.topo, "ft_incast8_flow", 8, ccs)
     analyze_incast(args.mix, args.topo, "ft_incast16_flow", 16, ccs)
+    analyze_outcast(args.mix, args.topo, 4, ccs)
+    analyze_outcast(args.mix, args.topo, 8, ccs)
 
 
 if __name__ == "__main__":

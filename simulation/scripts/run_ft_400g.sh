@@ -40,6 +40,16 @@ for cc in "${CCS[@]}"; do
   run_one "$cc" ft_incast16_flow
 done
 
+echo "== outcast4 (source NIC HoL, expect ~1/4) =="
+for cc in "${CCS[@]}"; do
+  run_one "$cc" ft_outcast4_flow
+done
+
+echo "== outcast8 (source NIC HoL, expect ~1/8) =="
+for cc in "${CCS[@]}"; do
+  run_one "$cc" ft_outcast8_flow
+done
+
 echo "== Analyze =="
 python3 ../analysis/analyze_ft.py --mix mix --ccs pfc,dcqcn,hp,timely
 echo "Done."

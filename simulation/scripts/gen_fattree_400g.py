@@ -95,15 +95,37 @@ def flows_pair2() -> list:
 def flows_hol() -> list:
     """PFC HoL on the destination leaf.
 
-    16:1 incast from leaf0+leaf3 onto leaf1 host0 congests *all* leaf1 uplinks.
-    Victim: leaf2 host0 -> leaf1 host1 (uncongested dest, same ToR).
-    PFC pauses spine->leaf1 ingress and stalls the victim (HoL).
+    16 senders x 2 QPs (32 flows) from leaf0+leaf3 onto leaf1 host0, so ECMP
+    occupies the dest-leaf uplinks. Victim probes (4 QPs) start during the
+    burst: leaf2 host0 -> leaf1 host1 (idle dest, same ToR). PFC on
+    spine->leaf1 ingress then stalls some/all victim QPs (HoL).
     """
-    victim = (host_id(2, 0), host_id(1, 1), 100, 2 * 1000 * 1000, 2.000000)
-    rows = [victim]
     senders = [host_id(0, i) for i in range(8)] + [host_id(3, i) for i in range(8)]
+    rows = []
+    dport = 200
+    for src in senders:
+        for _qp in range(2):
+            rows.append((src, host_id(1, 0), dport, 4 * 1000 * 1000, 2.000000))
+            dport += 1
+    for qp in range(4):
+        rows.append((host_id(2, 0), host_id(1, 1), 100 + qp, 3 * 1000 * 1000, 2.000300))
+    return rows
+
+
+def flows_outcast(n: int) -> list:
+    """Source-side outcast HoL (the 1/N signature).
+
+    N leaf0 hosts incast to dest C on leaf1. Host 0 *also* sends a victim
+    flow to idle dest V on leaf2. When PFC pauses host 0's NIC (same PG),
+    the victim is backpressured with the incast QP and gets ~1/N of 400G.
+    """
+    dest_c = host_id(1, 0)
+    dest_v = host_id(2, 0)
+    senders = [host_id(0, i) for i in range(n)]
+    rows = []
     for i, src in enumerate(senders):
-        rows.append((src, host_id(1, 0), 200 + i, 5 * 1000 * 1000, 2.000100))
+        rows.append((src, dest_c, 200 + i, 20 * 1000 * 1000, 2.000000))
+    rows.append((senders[0], dest_v, 100, 10 * 1000 * 1000, 2.000200))
     return rows
 
 
@@ -141,6 +163,8 @@ def main() -> None:
     write_flows(os.path.join(mix, "ft_hol_flow.txt"), flows_hol())
     write_flows(os.path.join(mix, "ft_incast8_flow.txt"), flows_incast(8))
     write_flows(os.path.join(mix, "ft_incast16_flow.txt"), flows_incast(16))
+    write_flows(os.path.join(mix, "ft_outcast4_flow.txt"), flows_outcast(4))
+    write_flows(os.path.join(mix, "ft_outcast8_flow.txt"), flows_outcast(8))
 
 
 if __name__ == "__main__":

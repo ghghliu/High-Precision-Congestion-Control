@@ -30,7 +30,26 @@ The topology always has 64 NICs so the fabric is 1:1. Workloads use a few racks/
 | Case | Hosts used | What it shows |
 |------|------------|----------------|
 | `ft_pair2` | 2 senders leaf0 → 2 dests leaf1 | Parallel uplinks actually ECMP; each flow ~400G |
-| `ft_hol` | 16 incast + 1 victim | **PFC HoL**: victim dest is idle, but shares paused spine→leaf1 ingress with incast |
+| `ft_hol` | 16 incast @ t=2.0s, remote victim probes @ t+300µs | dest-leaf HoL (ECMP spray) |
+| `ft_outcast4` / `ft_outcast8` | N:1 incast + **same-NIC** victim to another dest | **PFC outcast**: victim throttled to ~1/N |
+| `ft_incast8` | 8:1 onto one dest | **DCQCN slow recovery** after CNP, bottleneck left idle |
+| `ft_incast16` | 16:1 | Same, larger incast degree (trend) |
+
+## Outcast (source HoL)
+
+```
+leaf0 hosts 0..N-1  ----N:1---->  leaf1 dest C
+leaf0 host 0        ----1:1---->  leaf2 dest V   (idle rack)
+```
+
+Host 0 has two QPs on PG 3. PFC pauses the whole PG on that NIC, so the flow to V is backpressured even though V is idle — goodput ≈ 400G/N.
+
+Run just this case:
+
+```bash
+cd simulation
+bash scripts/run_outcast_400g.sh
+```
 | `ft_incast8` | 8:1 onto one dest | **DCQCN slow recovery** after CNP, bottleneck left idle |
 | `ft_incast16` | 16:1 | Same, larger incast degree (trend) |
 

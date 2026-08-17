@@ -12,8 +12,22 @@
 #include "ppp-header.h"
 #include "qbb-header.h"
 #include "cn-header.h"
+#include <cstdio>
 
 namespace ns3{
+
+FILE* RdmaHw::s_rateTrace = 0;
+void RdmaHw::SetRateTrace(FILE *f){
+	s_rateTrace = f;
+}
+void RdmaHw::LogRate(Ptr<RdmaQueuePair> qp, const char *why){
+	if (!s_rateTrace || !qp)
+		return;
+	fprintf(s_rateTrace, "%lu %08x %08x %u %u %lu %s\n",
+			Simulator::Now().GetTimeStep(), qp->sip.Get(), qp->dip.Get(),
+			qp->sport, qp->dport, (unsigned long)qp->m_rate.GetBitRate(), why);
+	fflush(s_rateTrace);
+}
 
 TypeId RdmaHw::GetTypeId (void)
 {
@@ -252,6 +266,7 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 	}else if (m_cc_mode == 10){
 		qp->hpccPint.m_curRate = m_bps;
 	}
+	LogRate(qp, "start");
 
 	// Notify Nic
 	m_nic[nic_idx].dev->NewQp(qp);
@@ -498,6 +513,7 @@ void RdmaHw::RecoverQueue(Ptr<RdmaQueuePair> qp){
 
 void RdmaHw::QpComplete(Ptr<RdmaQueuePair> qp){
 	NS_ASSERT(!m_qpCompleteCallback.IsNull());
+	LogRate(qp, "done");
 	if (m_cc_mode == 1){
 		Simulator::Cancel(qp->mlx.m_eventUpdateAlpha);
 		Simulator::Cancel(qp->mlx.m_eventDecreaseRate);
@@ -609,6 +625,7 @@ void RdmaHw::ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate){
 
 	// change to new rate
 	qp->m_rate = new_rate;
+	LogRate(qp, "cc");
 }
 
 #define PRINT_LOG 0
@@ -649,6 +666,7 @@ void RdmaHw::cnp_received_mlx(Ptr<RdmaQueuePair> q){
 		// set rate on first CNP
 		q->mlx.m_targetRate = q->m_rate = m_rateOnFirstCNP * q->m_rate;
 		q->mlx.m_first_cnp = false;
+		LogRate(q, "mlx_first_cnp");
 	}
 }
 
@@ -666,6 +684,7 @@ void RdmaHw::CheckRateDecreaseMlx(Ptr<RdmaQueuePair> q){
 		if (clamp)
 			q->mlx.m_targetRate = q->m_rate;
 		q->m_rate = std::max(m_minRate, q->m_rate * (1 - q->mlx.m_alpha / 2));
+		LogRate(q, "mlx_dec");
 		// reset rate increase related things
 		q->mlx.m_rpTimeStage = 0;
 		q->mlx.m_decrease_cnp_arrived = false;
@@ -701,6 +720,7 @@ void RdmaHw::FastRecoveryMlx(Ptr<RdmaQueuePair> q){
 	printf("%lu fast recovery: %08x %08x %u %u (%0.3lf %.3lf)->", Simulator::Now().GetTimeStep(), q->sip.Get(), q->dip.Get(), q->sport, q->dport, q->mlx.m_targetRate.GetBitRate() * 1e-9, q->m_rate.GetBitRate() * 1e-9);
 	#endif
 	q->m_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+	LogRate(q, "mlx_fr");
 	#if PRINT_LOG
 	printf("(%.3lf %.3lf)\n", q->mlx.m_targetRate.GetBitRate() * 1e-9, q->m_rate.GetBitRate() * 1e-9);
 	#endif
@@ -709,14 +729,13 @@ void RdmaHw::ActiveIncreaseMlx(Ptr<RdmaQueuePair> q){
 	#if PRINT_LOG
 	printf("%lu active inc: %08x %08x %u %u (%0.3lf %.3lf)->", Simulator::Now().GetTimeStep(), q->sip.Get(), q->dip.Get(), q->sport, q->dport, q->mlx.m_targetRate.GetBitRate() * 1e-9, q->m_rate.GetBitRate() * 1e-9);
 	#endif
-	// get NIC
 	uint32_t nic_idx = GetNicIdxOfQp(q);
 	Ptr<QbbNetDevice> dev = m_nic[nic_idx].dev;
-	// increate rate
 	q->mlx.m_targetRate += m_rai;
 	if (q->mlx.m_targetRate > dev->GetDataRate())
 		q->mlx.m_targetRate = dev->GetDataRate();
 	q->m_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+	LogRate(q, "mlx_ai");
 	#if PRINT_LOG
 	printf("(%.3lf %.3lf)\n", q->mlx.m_targetRate.GetBitRate() * 1e-9, q->m_rate.GetBitRate() * 1e-9);
 	#endif
@@ -725,14 +744,13 @@ void RdmaHw::HyperIncreaseMlx(Ptr<RdmaQueuePair> q){
 	#if PRINT_LOG
 	printf("%lu hyper inc: %08x %08x %u %u (%0.3lf %.3lf)->", Simulator::Now().GetTimeStep(), q->sip.Get(), q->dip.Get(), q->sport, q->dport, q->mlx.m_targetRate.GetBitRate() * 1e-9, q->m_rate.GetBitRate() * 1e-9);
 	#endif
-	// get NIC
 	uint32_t nic_idx = GetNicIdxOfQp(q);
 	Ptr<QbbNetDevice> dev = m_nic[nic_idx].dev;
-	// increate rate
 	q->mlx.m_targetRate += m_rhai;
 	if (q->mlx.m_targetRate > dev->GetDataRate())
 		q->mlx.m_targetRate = dev->GetDataRate();
 	q->m_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+	LogRate(q, "mlx_hai");
 	#if PRINT_LOG
 	printf("(%.3lf %.3lf)\n", q->mlx.m_targetRate.GetBitRate() * 1e-9, q->m_rate.GetBitRate() * 1e-9);
 	#endif
@@ -982,6 +1000,7 @@ void RdmaHw::UpdateRateTimely(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader
 			printf(" %c %.3lf\n", inc? '^':'v', qp->m_rate.GetBitRate() * 1e-9);
 		}
 		#endif
+		LogRate(qp, inc ? "tmly_inc" : "tmly_dec");
 	}
 	if (!us && next_seq > qp->tmly.m_lastUpdateSeq){
 		qp->tmly.m_lastUpdateSeq = next_seq;
@@ -1037,6 +1056,7 @@ void RdmaHw::HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &
 		printf("%lu %s %08x %08x %u %u %.3lf->", Simulator::Now().GetTimeStep(), "rate", qp->sip.Get(), qp->dip.Get(), qp->sport, qp->dport, qp->m_rate.GetBitRate()*1e-9);
 		#endif
 		qp->m_rate = std::max(m_minRate, qp->m_rate * (1 - qp->dctcp.m_alpha / 2));
+		LogRate(qp, "dctcp_dec");
 		#if PRINT_LOG
 		printf("%.3lf\n", qp->m_rate.GetBitRate() * 1e-9);
 		#endif
@@ -1045,8 +1065,10 @@ void RdmaHw::HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &
 	}
 
 	// additive inc
-	if (qp->dctcp.m_caState == 0 && new_batch)
+	if (qp->dctcp.m_caState == 0 && new_batch){
 		qp->m_rate = std::min(qp->m_max_rate, qp->m_rate + m_dctcp_rai);
+		LogRate(qp, "dctcp_ai");
+	}
 }
 
 /*********************

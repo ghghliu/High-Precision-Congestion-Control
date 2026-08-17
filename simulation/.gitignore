@@ -1,0 +1,10 @@
+build/
+.waf*
+.lock-waf*
+*.pyc
+mix/config_*.txt
+mix/fct_*.txt
+mix/pfc_*.txt
+mix/qlen_*.txt
+mix/mix_*.tr
+mix/rate_*.txt

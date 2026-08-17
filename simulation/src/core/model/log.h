@@ -398,7 +398,8 @@ private:
   char const *m_name;
 };
 
-class ParameterLogger : public std::ostream
+// Note: do not inherit from std::ostream — ambiguous overload with libstdc++ >=5 / gcc>=11
+class ParameterLogger
 {
   int m_itemNumber;
   std::ostream &m_os;

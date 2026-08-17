@@ -8,6 +8,7 @@
 #include "qbb-net-device.h"
 #include <unordered_map>
 #include "pint.h"
+#include <cstdio>
 
 namespace ns3 {
 
@@ -81,6 +82,9 @@ public:
 	void PktSent(Ptr<RdmaQueuePair> qp, Ptr<Packet> pkt, Time interframeGap);
 	void UpdateNextAvail(Ptr<RdmaQueuePair> qp, Time interframeGap, uint32_t pkt_size);
 	void ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate);
+	static FILE* s_rateTrace;
+	static void SetRateTrace(FILE *f);
+	void LogRate(Ptr<RdmaQueuePair> qp, const char *why);
 	/******************************
 	 * Mellanox's version of DCQCN
 	 *****************************/

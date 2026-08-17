@@ -1,0 +1,10 @@
+9 1 8
+8
+0 8 400Gbps 1000ns 0
+1 8 400Gbps 1000ns 0
+2 8 400Gbps 1000ns 0
+3 8 400Gbps 1000ns 0
+4 8 400Gbps 1000ns 0
+5 8 400Gbps 1000ns 0
+6 8 400Gbps 1000ns 0
+7 8 400Gbps 1000ns 0

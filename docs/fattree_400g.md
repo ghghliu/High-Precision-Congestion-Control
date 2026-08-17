@@ -59,7 +59,7 @@ cd simulation
 bash scripts/run_probe_400g.sh
 ```
 
-See `docs/probe_results_400g.md`.
+服务器上从编译到扫完：`docs/probe_runbook.md`。结果解读：`docs/probe_results_400g.md`。
 
 ## Expected signatures
 

@@ -10,6 +10,9 @@
 #include "qbb-net-device.h"
 #include "ppp-header.h"
 #include "ns3/int-header.h"
+#include "ns3/custom-header.h"
+#include "ns3/node-list.h"
+#include "ns3/simulator.h"
 #include <algorithm>
 #include <cmath>
 
@@ -41,9 +44,19 @@ TypeId SwitchNode::GetTypeId (void)
 			MakeUintegerAccessor(&SwitchNode::m_maxRtt),
 			MakeUintegerChecker<uint32_t>())
 	.AddAttribute("LbMode",
-			"Multipath load balancing. 0: 5-tuple ECMP, 1: one RR pointer per switch, slot 0 = lowest peer node id.",
+			"Multipath load balancing. 0: 5-tuple ECMP, 1: one RR pointer per switch, slot 0 = lowest peer node id. 2: same RR, but each round the host ports are presented in a new random order.",
 			UintegerValue(0),
 			MakeUintegerAccessor(&SwitchNode::m_lbMode),
+			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("RoundSeed",
+			"Seed mixed into the per-round host order when LbMode is 2.",
+			UintegerValue(1),
+			MakeUintegerAccessor(&SwitchNode::m_roundSeed),
+			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("ArrivalJitter",
+			"On a leaf, each packet from a host is held Uniform[0, J] ns before RR. 0 disables. The NIC still sends at line rate.",
+			UintegerValue(0),
+			MakeUintegerAccessor(&SwitchNode::m_arrivalJitterNs),
 			MakeUintegerChecker<uint32_t>())
   ;
   return tid;
@@ -53,6 +66,8 @@ SwitchNode::SwitchNode(){
 	m_ecmpSeed = m_id;
 	m_lbMode = 0;
 	m_rrPtr = 0;
+	m_roundSeed = 1;
+	m_arrivalJitterNs = 0;
 	m_node_type = 1;
 	m_mmu = CreateObject<SwitchMmu>();
 	for (uint32_t i = 0; i < pCnt; i++)
@@ -97,7 +112,7 @@ int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 	// choice. Slot 0 is the lowest peer node id, not routing-table insertion
 	// order (that order follows BFS pointer order and previously sent the
 	// first packet to the higher-id core). The downward hop is unique.
-	if (m_lbMode == 1 && nexthops.size() > 1){
+	if ((m_lbMode == 1 || m_lbMode == 2) && nexthops.size() > 1){
 		std::vector<int> ordered(nexthops.begin(), nexthops.end());
 		std::sort(ordered.begin(), ordered.end(), [this](int a, int b){
 			uint32_t ia = PeerNodeId(a);
@@ -227,8 +242,77 @@ void SwitchNode::ClearTable(){
 	m_rtTable.clear();
 }
 
+bool SwitchNode::IsHostPort(uint32_t ifIndex) const{
+	uint32_t peer = PeerNodeId(ifIndex);
+	if (peer == 0xffffffffu)
+		return false;
+	return NodeList::GetNode(peer)->GetNodeType() == 0;
+}
+
+uint32_t SwitchNode::HostRank(uint32_t round, uint32_t inDev) const{
+	std::vector<uint32_t> hosts;
+	for (uint32_t i = 0; i < GetNDevices(); ++i){
+		if (IsHostPort(i))
+			hosts.push_back(i);
+	}
+	std::sort(hosts.begin(), hosts.end(), [this, round](uint32_t a, uint32_t b){
+		auto mix = [this, round](uint32_t port){
+			uint32_t x = (m_id * 0x9e3779b1u) ^ (round * 0x85ebca6bu) ^ (port * 0xc2b2ae35u) ^ m_roundSeed;
+			x ^= x >> 16;
+			x *= 0x7feb352du;
+			x ^= x >> 15;
+			x *= 0x846ca68bu;
+			x ^= x >> 16;
+			return x;
+		};
+		uint32_t ha = mix(a);
+		uint32_t hb = mix(b);
+		if (ha != hb)
+			return ha < hb;
+		return a < b;
+	});
+	for (uint32_t rank = 0; rank < hosts.size(); ++rank){
+		if (hosts[rank] == inDev)
+			return rank;
+	}
+	return 0;
+}
+
+uint32_t SwitchNode::ArrivalDelay(uint32_t seq, uint32_t sip) const{
+	if (m_arrivalJitterNs == 0)
+		return 0;
+	uint32_t x = (m_id * 0x9e3779b1u) ^ (seq * 0x85ebca6bu) ^ sip ^ (m_roundSeed * 0xc2b2ae35u);
+	x ^= x >> 16;
+	x *= 0x7feb352du;
+	x ^= x >> 15;
+	x *= 0x846ca68bu;
+	x ^= x >> 16;
+	return x % (m_arrivalJitterNs + 1);
+}
+
+void SwitchNode::ForwardShuffled(Ptr<Packet> p){
+	CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+	ch.getInt = 1;
+	p->PeekHeader(ch);
+	SendToDev(p, ch);
+}
+
 // This function can only be called in switch mode
 bool SwitchNode::SwitchReceiveFromDevice(Ptr<NetDevice> device, Ptr<Packet> packet, CustomHeader &ch){
+	// Line-rate senders stay on a 20 ns grid. On the way up, each round's
+	// host ports are released to the RR pointer in a new random order.
+	// The last rank is one nanosecond per host, inside one packet time.
+	if (ch.l3Prot == 0x11 && IsHostPort(device->GetIfIndex())){
+		uint32_t delay = 0;
+		if (m_lbMode == 2)
+			delay = HostRank(ch.udp.seq / 1000, device->GetIfIndex());
+		else if (m_arrivalJitterNs > 0)
+			delay = ArrivalDelay(ch.udp.seq, ch.sip);
+		if (delay > 0 || m_lbMode == 2){
+			Simulator::Schedule(NanoSeconds(delay), &SwitchNode::ForwardShuffled, this, packet);
+			return true;
+		}
+	}
 	SendToDev(packet, ch);
 	return true;
 }

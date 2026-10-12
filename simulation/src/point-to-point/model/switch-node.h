@@ -15,8 +15,8 @@ class SwitchNode : public Node{
 	static const uint32_t pCnt = 257;	// Number of ports used
 	static const uint32_t qCnt = 8;	// Number of queues/priorities used
 	uint32_t m_ecmpSeed;
-	uint32_t m_lbMode; // 0: 5-tuple ECMP, 1: one global RR pointer for every multipath lookup
-	uint32_t m_rrPtr;
+	uint32_t m_lbMode; // 0: 5-tuple ECMP, 1: one RR pointer on this switch
+	uint32_t m_rrPtr;  // next RR slot; slot 0 is the lowest peer node id
 	std::unordered_map<uint32_t, std::vector<int> > m_rtTable; // map from ip address (u32) to possible ECMP port (index of dev)
 
 	// monitor of PFC
@@ -37,6 +37,7 @@ protected:
 
 private:
 	int GetOutDev(Ptr<const Packet>, CustomHeader &ch);
+	uint32_t PeerNodeId(uint32_t ifIndex) const;
 	void SendToDev(Ptr<Packet>p, CustomHeader &ch);
 	static uint32_t EcmpHash(const uint8_t* key, size_t len, uint32_t seed);
 	void CheckAndSendPfc(uint32_t inDev, uint32_t qIndex);

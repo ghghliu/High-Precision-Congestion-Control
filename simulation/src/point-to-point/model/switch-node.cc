@@ -10,6 +10,7 @@
 #include "qbb-net-device.h"
 #include "ppp-header.h"
 #include "ns3/int-header.h"
+#include <algorithm>
 #include <cmath>
 
 namespace ns3 {
@@ -40,7 +41,7 @@ TypeId SwitchNode::GetTypeId (void)
 			MakeUintegerAccessor(&SwitchNode::m_maxRtt),
 			MakeUintegerChecker<uint32_t>())
 	.AddAttribute("LbMode",
-			"Multipath load balancing. 0: 5-tuple ECMP, 1: global round-robin.",
+			"Multipath load balancing. 0: 5-tuple ECMP, 1: one RR pointer per switch, slot 0 = lowest peer node id.",
 			UintegerValue(0),
 			MakeUintegerAccessor(&SwitchNode::m_lbMode),
 			MakeUintegerChecker<uint32_t>())
@@ -66,6 +67,21 @@ SwitchNode::SwitchNode(){
 		m_u[i] = 0;
 }
 
+uint32_t SwitchNode::PeerNodeId(uint32_t ifIndex) const{
+	Ptr<NetDevice> dev = m_devices[ifIndex];
+	Ptr<Channel> channel = dev->GetChannel();
+	if (channel == 0)
+		return 0xffffffffu;
+	for (uint32_t i = 0; i < channel->GetNDevices(); ++i){
+		Ptr<NetDevice> other = channel->GetDevice(i);
+		if (other == 0 || other->GetNode() == 0)
+			continue;
+		if (other->GetNode()->GetId() != GetId())
+			return other->GetNode()->GetId();
+	}
+	return 0xffffffffu;
+}
+
 int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 	// look up entries
 	auto entry = m_rtTable.find(ch.dip);
@@ -77,13 +93,22 @@ int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 	// entry found
 	auto &nexthops = entry->second;
 
-	// Global RR (Ofan "Simple RR"): one pointer per switch, advanced once per
-	// packet that has a choice. On a fat-tree that choice exists only upward;
-	// the downward hop is unique and is left untouched.
+	// Simple RR: one pointer per switch, advanced once per packet that has a
+	// choice. Slot 0 is the lowest peer node id, not routing-table insertion
+	// order (that order follows BFS pointer order and previously sent the
+	// first packet to the higher-id core). The downward hop is unique.
 	if (m_lbMode == 1 && nexthops.size() > 1){
-		uint32_t idx = m_rrPtr % nexthops.size();
+		std::vector<int> ordered(nexthops.begin(), nexthops.end());
+		std::sort(ordered.begin(), ordered.end(), [this](int a, int b){
+			uint32_t ia = PeerNodeId(a);
+			uint32_t ib = PeerNodeId(b);
+			if (ia != ib)
+				return ia < ib;
+			return a < b;
+		});
+		uint32_t idx = m_rrPtr % ordered.size();
 		m_rrPtr++;
-		return nexthops[idx];
+		return ordered[idx];
 	}
 
 	// pick one next hop based on hash

@@ -78,6 +78,7 @@ uint32_t enable_trace = 1;
 uint32_t lb_mode = 0; // 0: ECMP, 1: global RR
 uint32_t tx_jitter_ns = 0; // per-packet send jitter, uniform [-J, J]
 uint32_t tx_jitter_seed = 1;
+uint32_t tx_jitter_mode = 0; // 0: gap, 1: phase on the line-rate grid
 uint32_t enable_nack = 1; // 0: do not NACK a sequence gap
 
 uint32_t buffer_size = 16;
@@ -543,6 +544,9 @@ int main(int argc, char *argv[])
 			}else if (key.compare("TX_JITTER_SEED") == 0){
 				conf >> tx_jitter_seed;
 				std::cout << "TX_JITTER_SEED\t\t" << tx_jitter_seed << '\n';
+			}else if (key.compare("TX_JITTER_MODE") == 0){
+				conf >> tx_jitter_mode;
+				std::cout << "TX_JITTER_MODE\t\t" << tx_jitter_mode << '\n';
 			}else if (key.compare("ENABLE_NACK") == 0){
 				conf >> enable_nack;
 				std::cout << "ENABLE_NACK\t\t" << enable_nack << '\n';
@@ -897,6 +901,7 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
 			rdmaHw->SetAttribute("TxJitter", UintegerValue(tx_jitter_ns));
 			rdmaHw->SetAttribute("TxJitterSeed", UintegerValue(tx_jitter_seed));
+			rdmaHw->SetAttribute("TxJitterMode", UintegerValue(tx_jitter_mode));
 			rdmaHw->SetAttribute("EnableNack", BooleanValue(enable_nack));
 			rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
 			rdmaHw->SetPintSmplThresh(pint_prob);

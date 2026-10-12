@@ -134,7 +134,7 @@ def shared_downlinks(cores, hosts_per):
     return sum(1 for n in buckets.values() if n >= 2), max(buckets.values())
 
 
-def run_case(out, case, nbytes, jitter_ns, seed, order="seq"):
+def run_case(out, case, nbytes, jitter_ns, seed, order="seq", jitter_mode=0):
     os.makedirs(out, exist_ok=True)
     topo_fn, flow_fn, hosts_per = CASES[case]
     topo = topo_fn()
@@ -142,7 +142,7 @@ def run_case(out, case, nbytes, jitter_ns, seed, order="seq"):
     write_topology(topo, os.path.join(out, "topology.txt"), "400Gbps", "1000ns")
     write_flows(os.path.join(out, "flow.txt"), flows, nbytes)
     write_trace(topo, os.path.join(out, "trace.txt"))
-    write_config(out, BW, 1, nbytes, 0.01, jitter_ns, seed, enable_nack=0)
+    write_config(out, BW, 1, nbytes, 0.01, jitter_ns, seed, enable_nack=0, tx_jitter_mode=jitter_mode)
     with open(os.path.join(out, "run.log"), "w") as f:
         subprocess.check_call(
             [WAF, os.path.join(SIM, "waf"), "--run", "scratch/third %s/config.txt" % out],

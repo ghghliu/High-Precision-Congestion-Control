@@ -472,7 +472,9 @@ namespace ns3 {
    }
 
    void QbbNetDevice::NewQp(Ptr<RdmaQueuePair> qp){
-	   qp->m_nextAvail = Simulator::Now();
+	   // A phase offset may already have pushed the first packet past Now.
+	   if (qp->m_nextAvail <= Simulator::Now())
+		   qp->m_nextAvail = Simulator::Now();
 	   DequeueAndTransmit();
    }
    void QbbNetDevice::ReassignedQp(Ptr<RdmaQueuePair> qp){

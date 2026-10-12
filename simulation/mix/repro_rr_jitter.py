@@ -118,7 +118,7 @@ def analyze(rows, neigh, edges, cores, topo):
     paths reorder that flow. It is not another RR decision for the original
     packet, so it does not enter the stickiness count.
     """
-    core_of = {topo["core"][0]: 0, topo["core"][1]: 1}
+    core_of = {node: i for i, node in enumerate(topo["core"])}
     edge_of = {node: i for i, node in enumerate(topo["edge"])}
     first = {}
     link_qmax = {}

@@ -22,6 +22,7 @@ values. NACK stays off. A negative jitter draw cannot beat the wire.
 
 import json
 import os
+import random
 import subprocess
 import sys
 
@@ -71,53 +72,73 @@ def write_flows(path, flows, nbytes):
         f.write("\n".join(lines) + "\n")
 
 
-def ring_flows():
-    """E0 -> E3 one-to-one, then the same shift on every leaf."""
-    flows = []
-    for edge in range(4):
-        dest = (edge + 3) % 4
-        for i in range(W):
-            flows.append((edge * W + i, dest * W + i, i * 1e-9))
-    return flows
+def _slots(n, order, rng):
+    slots = list(range(n))
+    if order == "rand":
+        rng.shuffle(slots)
+    return slots
 
 
-def collide_flows():
-    """Two leaves, phase-aligned, sharing cores toward E3 and E2.
+def collide_flows(order="seq", seed=1):
+    """Same pairing as the 2-host case, eight servers wide.
 
-    Local host i starts i ns later, so at zero jitter leaf RR gives it
-    core i. E0[0:8] and E1[0:8] therefore both sit on cores 0..7 and
-    both go to E3.
+    E0 front 8 -> E3 front 8, E0 back 8 -> E2 front 8,
+    E1 front 8 -> E3 back 8, E1 back 8 -> E2 back 8.
+    Sequential start gives local host i slot i nanoseconds, so both
+    leaves hand the same core to the same slot. Random start shuffles
+    that order independently on each leaf.
     """
+    rng = random.Random(seed)
+    start = {}
+    for edge in (0, 1):
+        for local, slot in enumerate(_slots(W, order, rng)):
+            start[(edge, local)] = slot * 1e-9
     flows = []
     for i in range(8):
-        flows.append((0 * W + i, 3 * W + i, i * 1e-9))
-        flows.append((0 * W + 8 + i, 2 * W + i, (8 + i) * 1e-9))
-        flows.append((1 * W + i, 3 * W + 8 + i, i * 1e-9))
-        flows.append((1 * W + 8 + i, 2 * W + 8 + i, (8 + i) * 1e-9))
+        flows.append((0 * W + i, 3 * W + i, start[(0, i)]))
+        flows.append((0 * W + 8 + i, 2 * W + i, start[(0, 8 + i)]))
+        flows.append((1 * W + i, 3 * W + 8 + i, start[(1, i)]))
+        flows.append((1 * W + 8 + i, 2 * W + 8 + i, start[(1, 8 + i)]))
     return flows
 
 
-def pair2_flows():
-    return [
-        (0, 6, 0.0),
-        (1, 4, 1e-9),
-        (2, 7, 0.0),
-        (3, 5, 1e-9),
-    ]
+def pair2_flows(order="seq", seed=1):
+    rng = random.Random(seed)
+    groups = {
+        0: [(0, 6), (1, 4)],
+        1: [(2, 7), (3, 5)],
+    }
+    flows = []
+    for edge, pairs in groups.items():
+        for (src, dst), slot in zip(pairs, _slots(2, order, rng)):
+            flows.append((src, dst, slot * 1e-9))
+    return flows
 
 
 CASES = {
-    "ring": (wide_topo, ring_flows),
-    "collide": (wide_topo, collide_flows),
-    "pair2": (lambda: fat_tree(2, 4), pair2_flows),
+    "collide": (wide_topo, collide_flows, W),
+    "pair2": (lambda: fat_tree(2, 4), pair2_flows, 2),
 }
 
 
-def run_case(out, case, nbytes, jitter_ns, seed):
+def shared_downlinks(cores, hosts_per):
+    buckets = {}
+    for key, core_counts in cores.items():
+        dip = int(str(key).split("-")[1])
+        core = max(core_counts.items(), key=lambda kv: kv[1])[0]
+        edge = dip // hosts_per
+        slot = (int(core), edge)
+        buckets[slot] = buckets.get(slot, 0) + 1
+    if not buckets:
+        return 0, 0
+    return sum(1 for n in buckets.values() if n >= 2), max(buckets.values())
+
+
+def run_case(out, case, nbytes, jitter_ns, seed, order="seq"):
     os.makedirs(out, exist_ok=True)
-    topo_fn, flow_fn = CASES[case]
+    topo_fn, flow_fn, hosts_per = CASES[case]
     topo = topo_fn()
-    flows = flow_fn()
+    flows = flow_fn(order=order, seed=seed)
     write_topology(topo, os.path.join(out, "topology.txt"), "400Gbps", "1000ns")
     write_flows(os.path.join(out, "flow.txt"), flows, nbytes)
     write_trace(topo, os.path.join(out, "trace.txt"))
@@ -140,60 +161,85 @@ def run_case(out, case, nbytes, jitter_ns, seed):
             % (out, expect, summary["n_first"], summary["n_enqu"])
         )
     pfc = os.path.join(out, "pfc.txt")
+    n_shared, widest = shared_downlinks(summary["cores"], hosts_per)
     summary.update({
         "case": case,
+        "order": order,
         "nbytes": nbytes,
         "jitter_ns": jitter_ns,
         "seed": seed,
         "n_flows": len(flows),
         "n_cores": len(topo["core"]),
+        "n_shared": n_shared,
+        "widest": widest,
         "pfc": sum(1 for _ in open(pfc)) if os.path.exists(pfc) else 0,
     })
     return summary
 
 
+def _emit(summary):
+    print(
+        "  qmax", summary["down_qmax"],
+        "shared", summary["n_shared"],
+        "wide", summary["widest"],
+        "stick", summary["stick_min"],
+        "gap", summary["mean_gap_ns"],
+        "upq", summary["up_qmax"],
+        "pfc", summary["pfc"],
+        flush=True,
+    )
+
+
 def main():
     root = "/tmp/rr-wide"
     for arg in sys.argv[1:]:
-        if arg != "--pilot":
+        if not arg.startswith("--"):
             root = arg
     pilot = "--pilot" in sys.argv
     os.makedirs(root, exist_ok=True)
-    jitters = [0] if pilot else [0, 2, 4, 8, 16, 32]
-    results = []
-    for case in ("pair2", "collide", "ring"):
-        for jitter in jitters:
-            seeds = [1] if jitter == 0 else [1, 2]
-            for seed in seeds:
-                print("run", case, jitter, "seed", seed, flush=True)
-                summary = run_case(os.path.join(root, "%s-j%d-s%d" % (case, jitter, seed)), case, 160000, jitter, seed)
-                results.append(summary)
-                print(
-                    "  qmax", summary["down_qmax"],
-                    "upq", summary["up_qmax"],
-                    "stick", summary["stick_min"],
-                    "gap", summary["mean_gap_ns"],
-                    "pfc", summary["pfc"],
-                    "link", summary["down_link"],
-                    flush=True,
-                )
+    jitters = [0, 2] if pilot else [0, 2, 4, 8, 16, 32]
+    jitter_rows = []
+    for jitter in jitters:
+        seeds = [1] if jitter == 0 else [1, 2]
+        for seed in seeds:
+            print("jitter", jitter, "seed", seed, flush=True)
+            summary = run_case(
+                os.path.join(root, "j%d-s%d" % (jitter, seed)),
+                "collide", 160000, jitter, seed, "seq",
+            )
+            jitter_rows.append(summary)
+            _emit(summary)
+    order_rows = []
+    for case in ("pair2", "collide"):
+        print("order", case, "seq", flush=True)
+        summary = run_case(os.path.join(root, "order-%s-seq" % case), case, 160000, 0, 1, "seq")
+        order_rows.append(summary)
+        _emit(summary)
+        seeds = [1, 2] if pilot else list(range(1, 9))
+        for seed in seeds:
+            print("order", case, "rand", seed, flush=True)
+            summary = run_case(
+                os.path.join(root, "order-%s-r%d" % (case, seed)),
+                case, 160000, 0, seed, "rand",
+            )
+            order_rows.append(summary)
+            _emit(summary)
     long_rows = []
     if not pilot:
-        for case in ("pair2", "collide", "ring"):
-            for jitter in (0, 4, 8):
-                print("run long", case, jitter, flush=True)
-                summary = run_case(os.path.join(root, "long-%s-j%d" % (case, jitter)), case, 1600000, jitter, 1)
-                long_rows.append(summary)
-                print(
-                    "  qmax", summary["down_qmax"],
-                    "stick", summary["stick_min"],
-                    "gap", summary["mean_gap_ns"],
-                    "pfc", summary["pfc"],
-                    flush=True,
-                )
+        for label, case, order, seed, jitter in (
+            ("long-seq", "collide", "seq", 1, 0),
+            ("long-rand", "collide", "rand", 1, 0),
+            ("long-j4", "collide", "seq", 1, 4),
+            ("long-pair-seq", "pair2", "seq", 1, 0),
+            ("long-pair-rand", "pair2", "rand", 1, 0),
+        ):
+            print("run", label, flush=True)
+            summary = run_case(os.path.join(root, label), case, 1600000, jitter, seed, order)
+            long_rows.append(summary)
+            _emit(summary)
     path = os.path.join(root, "results.json")
     with open(path, "w") as f:
-        json.dump({"short": results, "long": long_rows}, f)
+        json.dump({"jitter": jitter_rows, "order": order_rows, "long": long_rows}, f)
     print("WROTE", path)
     if not pilot:
         plot(path)
@@ -251,46 +297,61 @@ def plot(path):
 
     _font()
     data = json.load(open(path))
-    short, long_rows = data["short"], data["long"]
+    _plot_jitter(plt, data)
+    _plot_order(plt, data, "pair2", "400 Gbps，2 台：启动顺序", "fattree-400-order-2.png")
+    _plot_order(plt, data, "collide", "400 Gbps，16 台：启动顺序", "fattree-400-order-16.png")
+    _draw_traffic_16(plt)
 
+
+def _plot_jitter(plt, data):
     fig, ax = plt.subplots(figsize=(7.6, 5.0), dpi=140)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.20, top=0.88)
-    xs, q, err, rate = _series("pair2", short, 160000)
-    ax.errorbar(xs, q, yerr=err, color="#c2410c", marker="o", lw=2, ms=7, capsize=3, label="160 KB")
-    lxs, lq, _, _ = _series("pair2", long_rows, 1600000)
-    ax.plot(lxs, lq, color="#1d4ed8", marker="s", lw=2, ms=7, label="1.6 MB")
-    _queue_ax(ax, "400 Gbps，每个 leaf 2 台服务器")
+    xs, q, err, rate = _series("collide", data["jitter"], 160000)
+    ax.errorbar(xs, q, yerr=err, color="#1d4ed8", marker="o", lw=2, ms=7, capsize=3, label="160 KB，顺序启动")
+    seq_long = [r for r in data["long"] if r.get("order") == "seq" and r["jitter_ns"] in (0, 4)]
+    lxs, lq, _, _ = _series("collide", seq_long, 1600000)
+    ax.plot(lxs, lq, color="#c2410c", marker="s", lw=2, ms=7, label="1.6 MB，顺序启动")
+    _queue_ax(ax, "400 Gbps，每个 leaf 16 台，顺序启动后加抖动")
     fig.text(
         0.54,
         0.04,
-        "只画队列。  " + "  ".join("J=%d  %.0f%%" % (x, 100 * r) for x, r in zip(xs, rate)),
-        ha="center",
-        fontsize=8.5,
-        color="#344054",
-    )
-    _save(fig, "fattree-400-queue-2.png")
-    plt.close(fig)
-
-    fig, ax = plt.subplots(figsize=(7.6, 5.0), dpi=140)
-    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.20, top=0.88)
-    xs, q, err, rate = _series("ring", short, 160000)
-    ax.errorbar(xs, q, yerr=err, color="#0f766e", marker="o", lw=2, ms=7, capsize=3, label="打对面，160 KB")
-    xs, q, err, _ = _series("collide", short, 160000)
-    ax.errorbar(xs, q, yerr=err, color="#1d4ed8", marker="s", lw=2, ms=7, capsize=3, label="两条 leaf 对齐，160 KB")
-    lxs, lq, _, _ = _series("collide", long_rows, 1600000)
-    ax.plot(lxs, lq, color="#c2410c", marker="D", lw=2, ms=6.5, label="两条 leaf 对齐，1.6 MB")
-    _queue_ax(ax, "400 Gbps，每个 leaf 16 台服务器")
-    fig.text(
-        0.54,
-        0.04,
-        "打对面的 1.6 MB 也是 0。  " + "  ".join("J=%d  %.0f%%" % (x, 100 * r) for x, r in zip(xs, rate)),
+        "  ".join("J=%d  %.0f%%" % (x, 100 * r) for x, r in zip(xs, rate)),
         ha="center",
         fontsize=8.5,
         color="#344054",
     )
     _save(fig, "fattree-400-queue-16.png")
     plt.close(fig)
-    draw_diagrams()
+
+
+def _plot_order(plt, data, case, title, name):
+    import numpy as np
+
+    rows = [r for r in data["order"] if r["case"] == case and r["nbytes"] == 160000]
+    seq = [r for r in rows if r["order"] == "seq"]
+    rnd = sorted([r for r in rows if r["order"] == "rand"], key=lambda r: r["seed"])
+    labels = ["顺序"] + ["随机%d" % r["seed"] for r in rnd]
+    ratios = [seq[0]["down_qmax"] / float(seq[0]["nbytes"])] + [r["down_qmax"] / float(r["nbytes"]) for r in rnd]
+    shared = [seq[0]["n_shared"]] + [r["n_shared"] for r in rnd]
+    fig, axes = plt.subplots(2, 1, figsize=(8.2, 6.4), dpi=140, sharex=True)
+    fig.subplots_adjust(left=0.12, right=0.97, bottom=0.12, top=0.90, hspace=0.18)
+    x = np.arange(len(labels))
+    colors = ["#c2410c"] + ["#1d4ed8"] * len(rnd)
+    axes[0].bar(x, ratios, color=colors, width=0.72)
+    axes[0].set_ylabel("热下行最大队列 / 消息")
+    axes[0].set_ylim(0, 1.35)
+    axes[0].set_title(title)
+    axes[0].spines["top"].set_visible(False)
+    axes[0].spines["right"].set_visible(False)
+    axes[1].bar(x, shared, color=colors, width=0.72)
+    axes[1].set_ylabel("叠了两条流的下联条数")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels, fontsize=8)
+    axes[1].spines["top"].set_visible(False)
+    axes[1].spines["right"].set_visible(False)
+    fig.text(0.54, 0.02, "没有逐包抖动。随机只打乱每个 leaf 上谁先启动，间隔仍是 1 ns。", ha="center", fontsize=8.5, color="#344054")
+    _save(fig, name)
+    plt.close(fig)
 
 
 def _box(ax, x, y, w, h, text, fc, ec, fs=8, weight="regular", tc="#111827"):
@@ -358,7 +419,6 @@ def draw_diagrams():
     _draw_traffic_2(plt)
     _draw_topo_16(plt)
     _draw_traffic_16(plt)
-    _draw_traffic_align(plt)
 
 
 def _draw_topo_2(plt):
@@ -482,26 +542,24 @@ def _through(ax, y, color):
 
 
 def _draw_traffic_16(plt):
-    fig, ax = plt.subplots(figsize=(12.2, 8.0), dpi=140)
-    fig.subplots_adjust(left=0.04, right=0.96, bottom=0.06, top=0.90)
+    fig, ax = plt.subplots(figsize=(12.2, 6.6), dpi=140)
+    fig.subplots_adjust(left=0.04, right=0.96, bottom=0.08, top=0.88)
     ax.set_xlim(0, 12)
-    ax.set_ylim(-0.35, 9.7)
-    _blank(ax, "流量：每个 leaf 的 16 台打到对面 leaf 的 16 台")
-    colors = ["#c2410c", "#1d4ed8", "#7c3aed", "#047857"]
-    pairs = [(0, 3), (1, 0), (2, 1), (3, 2)]
-    front_y = [8.15, 7.15, 6.15, 5.15]
-    back_y = [3.45, 2.45, 1.45, 0.45]
-    _band(ax, 4.05, 4.75, 3.9, 3.8, "C0 – C7")
-    _band(ax, 4.05, 0.05, 3.9, 3.8, "C8 – C15")
-    for i, (src, dst) in enumerate(pairs):
-        color = colors[src]
-        _box(ax, 1.45, front_y[i], 2.35, 0.62, "E%d 前 8" % src, "#ffffff", color, fs=12, tc=color, weight="bold")
-        _box(ax, 10.55, front_y[i], 2.35, 0.62, "E%d 前 8" % dst, "#ffffff", color, fs=12, tc=color, weight="bold")
-        _through(ax, front_y[i], color)
-        _box(ax, 1.45, back_y[i], 2.35, 0.62, "E%d 后 8" % src, "#ffffff", color, fs=12, tc=color, weight="bold")
-        _box(ax, 10.55, back_y[i], 2.35, 0.62, "E%d 后 8" % dst, "#ffffff", color, fs=12, tc=color, weight="bold")
-        _through(ax, back_y[i], color)
-    ax.text(6.0, 9.35, "同一行是一组 8 条流。J=0 时前 8 台占 C0–C7，后 8 台占 C8–C15，每条下行只有一条流。", ha="center", fontsize=10, color="#344054")
+    ax.set_ylim(-0.55, 6.7)
+    _blank(ax, "流量：16 台，对应 2 台时的四组")
+    rows = [
+        (5.45, "E0 前 8", "E3 前 8", "#c2410c", "C0 – C7"),
+        (4.35, "E1 前 8", "E3 后 8", "#7c3aed", None),
+        (2.15, "E0 后 8", "E2 前 8", "#c2410c", "C8 – C15"),
+        (1.05, "E1 后 8", "E2 后 8", "#7c3aed", None),
+    ]
+    _band(ax, 4.05, 3.9, 3.9, 2.0, "顺序启动时走 C0 – C7，下行到 E3")
+    _band(ax, 4.05, 0.6, 3.9, 2.0, "顺序启动时走 C8 – C15，下行到 E2")
+    for y, left, right, color, _note in rows:
+        _box(ax, 1.45, y, 2.35, 0.58, left, "#ffffff", color, fs=12, tc=color, weight="bold")
+        _box(ax, 10.55, y, 2.35, 0.58, right, "#ffffff", color, fs=12, tc=color, weight="bold")
+        _through(ax, y, color)
+    ax.text(6.0, -0.25, "和 2 台时一样：E0 前 8→E3 前 8，E0 后 8→E2 前 8，E1 前 8→E3 后 8，E1 后 8→E2 后 8。", ha="center", fontsize=10, color="#344054")
     _save(fig, "fattree-400-traffic-16.png")
     plt.close(fig)
 

@@ -75,6 +75,7 @@ uint64_t link_down_time = 0;
 uint32_t link_down_A = 0, link_down_B = 0;
 
 uint32_t enable_trace = 1;
+uint32_t lb_mode = 0; // 0: ECMP, 1: global RR
 
 uint32_t buffer_size = 16;
 
@@ -530,6 +531,9 @@ int main(int argc, char *argv[])
 			else if (key.compare("CC_MODE") == 0){
 				conf >> cc_mode;
 				std::cout << "CC_MODE\t\t" << cc_mode << '\n';
+			}else if (key.compare("LB_MODE") == 0){
+				conf >> lb_mode;
+				std::cout << "LB_MODE\t\t" << lb_mode << '\n';
 			}else if (key.compare("RATE_DECREASE_INTERVAL") == 0){
 				double v;
 				conf >> v;
@@ -936,6 +940,7 @@ int main(int argc, char *argv[])
 		if (n.Get(i)->GetNodeType() == 1){ // switch
 			Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(i));
 			sw->SetAttribute("CcMode", UintegerValue(cc_mode));
+			sw->SetAttribute("LbMode", UintegerValue(lb_mode));
 			sw->SetAttribute("MaxRtt", UintegerValue(maxRtt));
 		}
 	}

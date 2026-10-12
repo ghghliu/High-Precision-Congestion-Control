@@ -15,6 +15,8 @@ class SwitchNode : public Node{
 	static const uint32_t pCnt = 257;	// Number of ports used
 	static const uint32_t qCnt = 8;	// Number of queues/priorities used
 	uint32_t m_ecmpSeed;
+	uint32_t m_lbMode; // 0: 5-tuple ECMP, 1: one global RR pointer for every multipath lookup
+	uint32_t m_rrPtr;
 	std::unordered_map<uint32_t, std::vector<int> > m_rtTable; // map from ip address (u32) to possible ECMP port (index of dev)
 
 	// monitor of PFC

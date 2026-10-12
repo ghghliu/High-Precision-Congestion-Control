@@ -39,12 +39,19 @@ TypeId SwitchNode::GetTypeId (void)
 			UintegerValue(9000),
 			MakeUintegerAccessor(&SwitchNode::m_maxRtt),
 			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("LbMode",
+			"Multipath load balancing. 0: 5-tuple ECMP, 1: global round-robin.",
+			UintegerValue(0),
+			MakeUintegerAccessor(&SwitchNode::m_lbMode),
+			MakeUintegerChecker<uint32_t>())
   ;
   return tid;
 }
 
 SwitchNode::SwitchNode(){
 	m_ecmpSeed = m_id;
+	m_lbMode = 0;
+	m_rrPtr = 0;
 	m_node_type = 1;
 	m_mmu = CreateObject<SwitchMmu>();
 	for (uint32_t i = 0; i < pCnt; i++)
@@ -69,6 +76,15 @@ int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 
 	// entry found
 	auto &nexthops = entry->second;
+
+	// Global RR (Ofan "Simple RR"): one pointer per switch, advanced once per
+	// packet that has a choice. On a fat-tree that choice exists only upward;
+	// the downward hop is unique and is left untouched.
+	if (m_lbMode == 1 && nexthops.size() > 1){
+		uint32_t idx = m_rrPtr % nexthops.size();
+		m_rrPtr++;
+		return nexthops[idx];
+	}
 
 	// pick one next hop based on hash
 	union {

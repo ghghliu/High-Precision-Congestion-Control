@@ -4,10 +4,10 @@
 k=4: 4 edge switches, 2 cores, 2 hosts per edge (8 hosts). Every edge
 connects to every core. Congestion control and ECN stay off.
 
-The permutation sends the first host of edge 0 and the first host of edge 1
-to the two hosts under edge 3. Global RR starts at the same pointer on every
-edge, so those two flows stick to the same core and pile onto one
-core->edge downlink. The two uplinks of each source edge stay balanced.
+Four flows only. Each edge switch has its own RR pointer, starting at 0.
+Slot 0 is the core with the smaller node id (C0). H0 and H2 send first, so
+both stick to C0 and share C0->E3. H1 and H3 send 1 ns later and stick to
+C1, sharing C1->E2. Each source uplink carries one flow.
 """
 
 import os
@@ -37,16 +37,12 @@ FLOWS_BYTES = 10000
 
 def collision_flows():
     # 1 ns stagger inside an edge fixes which local host is RR slot 0.
-    # Across edges, slot 0 is aligned, which is the Simple RR failure mode.
+    # Slot 0 on every edge is C0 (lowest core node id).
     return [
-        (0, 6, 0.0),
-        (1, 4, 1e-9),
-        (2, 7, 0.0),
-        (3, 5, 1e-9),
-        (4, 0, 0.0),
-        (5, 2, 1e-9),
-        (6, 1, 0.0),
-        (7, 3, 1e-9),
+        (0, 6, 0.0),    # H0->H6, first on E0 -> C0
+        (1, 4, 1e-9),   # H1->H4, second on E0 -> C1
+        (2, 7, 0.0),    # H2->H7, first on E1 -> C0
+        (3, 5, 1e-9),   # H3->H5, second on E1 -> C1
     ]
 
 
@@ -151,6 +147,7 @@ def ip_to_host(ip):
 def summarize(rows, neigh, edges, cores):
     enqu = [r for r in rows if r["event"] == "Enqu"]
     by_flow_edge = {}
+    first_core = {}
     link_pkts = {}
     link_qmax = {}
     for r in enqu:
@@ -163,7 +160,10 @@ def summarize(rows, neigh, edges, cores):
         if r["node"] in edges and nbr in cores:
             flow = (ip_to_host(r["sip"]), ip_to_host(r["dip"]))
             by_flow_edge.setdefault(flow, set()).add(nbr)
-    return by_flow_edge, link_pkts, link_qmax
+            prev = first_core.get(flow)
+            if prev is None or r["time"] < prev[0]:
+                first_core[flow] = (r["time"], nbr)
+    return by_flow_edge, link_pkts, link_qmax, first_core
 
 
 def run_case(out, lb_mode, nbytes):
@@ -190,7 +190,7 @@ def run_case(out, lb_mode, nbytes):
     rows = parse_trace(text)
     edges = set(topo["edge"])
     cores = set(topo["core"])
-    flows, pkts, qmax = summarize(rows, port_neighbors(topo), edges, cores)
+    flows, pkts, qmax, first_core = summarize(rows, port_neighbors(topo), edges, cores)
     pfc = os.path.join(out, "pfc.txt")
     n_pfc = sum(1 for _ in open(pfc)) if os.path.exists(pfc) else 0
     return {
@@ -198,6 +198,7 @@ def run_case(out, lb_mode, nbytes):
         "flows": flows,
         "pkts": pkts,
         "qmax": qmax,
+        "first_core": first_core,
         "pfc": n_pfc,
         "nbytes": nbytes,
         "lb": lb_mode,
@@ -217,7 +218,16 @@ def main():
             f.write("== %s bytes=%d pfc=%d ==\n" % (key[0], key[1], res["pfc"]))
             f.write("sticky cores per flow (source edge uplink):\n")
             for flow, cores in sorted(res["flows"].items()):
-                f.write("  %s -> %s\n" % (flow, sorted(cores)))
+                first = res["first_core"].get(flow)
+                f.write("  %s -> %s first=%s\n" % (flow, sorted(cores), first))
+            if key[0] == "rr":
+                # core[0] is C0, the lowest node id, and must be slot 0.
+                c0, c1 = res["topo"]["core"]
+                expect = {(0, 6): c0, (2, 7): c0, (1, 4): c1, (3, 5): c1}
+                for flow, core in sorted(expect.items()):
+                    got = res["flows"].get(flow)
+                    if got != set([core]):
+                        raise SystemExit("RR slot order mismatch for %s: got %s want {%d}" % (flow, got, core))
             f.write("uplink packets / max qlen:\n")
             edges, cores = set(res["topo"]["edge"]), set(res["topo"]["core"])
             for (node, nbr), cnt in sorted(res["pkts"].items()):

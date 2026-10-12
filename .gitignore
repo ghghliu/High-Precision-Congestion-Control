@@ -1,0 +1,9 @@
+simulation/build/
+simulation/.lock-waf*
+simulation/.waf-*
+simulation/.waf3-*
+**/__pycache__/
+*.pyc
+simulation/mix/out/
+analysis/trace_reader
+analysis/fct_analysis

@@ -75,6 +75,12 @@ uint64_t link_down_time = 0;
 uint32_t link_down_A = 0, link_down_B = 0;
 
 uint32_t enable_trace = 1;
+uint32_t lb_mode = 0; // 0: ECMP, 1: global RR
+uint32_t tx_jitter_ns = 0; // per-packet send jitter, uniform [-J, J]
+uint32_t tx_jitter_seed = 1;
+uint32_t tx_jitter_mode = 0; // 0: gap, 1: phase on the line-rate grid
+uint32_t arrival_jitter_ns = 0; // leaf hold, uniform [0, J], NIC stays at line rate
+uint32_t enable_nack = 1; // 0: do not NACK a sequence gap
 
 uint32_t buffer_size = 16;
 
@@ -530,6 +536,24 @@ int main(int argc, char *argv[])
 			else if (key.compare("CC_MODE") == 0){
 				conf >> cc_mode;
 				std::cout << "CC_MODE\t\t" << cc_mode << '\n';
+			}else if (key.compare("LB_MODE") == 0){
+				conf >> lb_mode;
+				std::cout << "LB_MODE\t\t" << lb_mode << '\n';
+			}else if (key.compare("TX_JITTER_NS") == 0){
+				conf >> tx_jitter_ns;
+				std::cout << "TX_JITTER_NS\t\t" << tx_jitter_ns << '\n';
+			}else if (key.compare("TX_JITTER_SEED") == 0){
+				conf >> tx_jitter_seed;
+				std::cout << "TX_JITTER_SEED\t\t" << tx_jitter_seed << '\n';
+			}else if (key.compare("TX_JITTER_MODE") == 0){
+				conf >> tx_jitter_mode;
+				std::cout << "TX_JITTER_MODE\t\t" << tx_jitter_mode << '\n';
+			}else if (key.compare("ARRIVAL_JITTER_NS") == 0){
+				conf >> arrival_jitter_ns;
+				std::cout << "ARRIVAL_JITTER_NS\t\t" << arrival_jitter_ns << '\n';
+			}else if (key.compare("ENABLE_NACK") == 0){
+				conf >> enable_nack;
+				std::cout << "ENABLE_NACK\t\t" << enable_nack << '\n';
 			}else if (key.compare("RATE_DECREASE_INTERVAL") == 0){
 				double v;
 				conf >> v;
@@ -879,6 +903,10 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("SampleFeedback", BooleanValue(sample_feedback));
 			rdmaHw->SetAttribute("TargetUtil", DoubleValue(u_target));
 			rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
+			rdmaHw->SetAttribute("TxJitter", UintegerValue(tx_jitter_ns));
+			rdmaHw->SetAttribute("TxJitterSeed", UintegerValue(tx_jitter_seed));
+			rdmaHw->SetAttribute("TxJitterMode", UintegerValue(tx_jitter_mode));
+			rdmaHw->SetAttribute("EnableNack", BooleanValue(enable_nack));
 			rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
 			rdmaHw->SetPintSmplThresh(pint_prob);
 			// create and install RdmaDriver
@@ -936,6 +964,9 @@ int main(int argc, char *argv[])
 		if (n.Get(i)->GetNodeType() == 1){ // switch
 			Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(i));
 			sw->SetAttribute("CcMode", UintegerValue(cc_mode));
+			sw->SetAttribute("LbMode", UintegerValue(lb_mode));
+			sw->SetAttribute("RoundSeed", UintegerValue(tx_jitter_seed));
+			sw->SetAttribute("ArrivalJitter", UintegerValue(arrival_jitter_ns));
 			sw->SetAttribute("MaxRtt", UintegerValue(maxRtt));
 		}
 	}

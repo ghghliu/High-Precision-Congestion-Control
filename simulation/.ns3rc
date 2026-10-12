@@ -1,0 +1,15 @@
+#! /usr/bin/env python
+modules_enabled = [
+    'core',
+    'network',
+    'stats',
+    'bridge',
+    'mpi',
+    'internet',
+    'config-store',
+    'tools',
+    'point-to-point',
+    'applications',
+]
+examples_enabled = False
+tests_enabled = False

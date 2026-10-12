@@ -46,7 +46,7 @@ def collision_flows():
     ]
 
 
-def write_config(directory, bw_bps, lb_mode, nbytes, stop):
+def write_config(directory, bw_bps, lb_mode, nbytes, stop, tx_jitter_ns=0, tx_jitter_seed=1, enable_nack=1):
     d = os.path.abspath(directory)
     text = """ENABLE_QCN 0
 USE_DYNAMIC_PFC_THRESHOLD 1
@@ -86,6 +86,9 @@ SAMPLE_FEEDBACK 0
 PINT_LOG_BASE 1.05
 PINT_PROB 1.0
 RATE_BOUND 1
+TX_JITTER_NS {jitter}
+TX_JITTER_SEED {jseed}
+ENABLE_NACK {nack}
 ACK_HIGH_PRIO 0
 LINK_DOWN 0 0 0
 ENABLE_TRACE 1
@@ -96,7 +99,7 @@ BUFFER_SIZE 64
 QLEN_MON_FILE {d}/qlen.txt
 QLEN_MON_START 20000000000
 QLEN_MON_END 20000000000
-""".format(d=d, stop=stop, lb=lb_mode, bw=bw_bps)
+""".format(d=d, stop=stop, lb=lb_mode, bw=bw_bps, jitter=tx_jitter_ns, jseed=tx_jitter_seed, nack=enable_nack)
     with open(os.path.join(directory, "config.txt"), "w") as f:
         f.write(text)
 

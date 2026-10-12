@@ -54,6 +54,11 @@ TypeId RdmaHw::GetTypeId (void)
 				BooleanValue(false),
 				MakeBooleanAccessor(&RdmaHw::m_backto0),
 				MakeBooleanChecker())
+		.AddAttribute("EnableNack",
+				"Generate a NACK when a packet arrives ahead of the expected sequence. Default on.",
+				BooleanValue(true),
+				MakeBooleanAccessor(&RdmaHw::m_enableNack),
+				MakeBooleanChecker())
 		.AddAttribute("EwmaGain",
 				"Control gain parameter which determines the level of rate decrease",
 				DoubleValue(1.0 / 16),
@@ -129,6 +134,16 @@ TypeId RdmaHw::GetTypeId (void)
 				BooleanValue(true),
 				MakeBooleanAccessor(&RdmaHw::m_rateBound),
 				MakeBooleanChecker())
+		.AddAttribute("TxJitter",
+				"Per-packet send jitter in nanoseconds, uniform in [-J, J]. 0 disables. A draw that would beat line rate is sent when the wire is free.",
+				UintegerValue(0),
+				MakeUintegerAccessor(&RdmaHw::m_txJitterNs),
+				MakeUintegerChecker<uint32_t>())
+		.AddAttribute("TxJitterSeed",
+				"RNG stream salt for per-packet send jitter.",
+				UintegerValue(1),
+				MakeUintegerAccessor(&RdmaHw::m_jitterSeed),
+				MakeUintegerChecker<uint32_t>())
 		.AddAttribute("MultiRate",
 				"Maintain multiple rates in HPCC",
 				BooleanValue(true),
@@ -179,10 +194,15 @@ TypeId RdmaHw::GetTypeId (void)
 }
 
 RdmaHw::RdmaHw(){
+	m_enableNack = true;
+	m_txJitterNs = 0;
+	m_jitterSeed = 1;
+	m_jitter = CreateObject<UniformRandomVariable>();
 }
 
 void RdmaHw::SetNode(Ptr<Node> node){
 	m_node = node;
+	m_jitter->SetStream(node->GetId() + 1 + m_jitterSeed * 17);
 }
 void RdmaHw::Setup(QpCompleteCallback cb){
 	for (uint32_t i = 0; i < m_nic.size(); i++){
@@ -463,6 +483,10 @@ int RdmaHw::ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size
 			return 5;
 		}
 	} else if (seq > expected) {
+		// A gap. With NACK disabled the receiver does not ask for a go-back-N,
+		// so a reordered flow is not restarted. Default stays on.
+		if (!m_enableNack)
+			return 4;
 		// Generate NACK
 		if (Simulator::Now() >= q->m_nackTimer || q->m_lastNACK != expected){
 			q->m_nackTimer = Simulator::Now() + MicroSeconds(m_nack_interval);
@@ -594,7 +618,17 @@ void RdmaHw::UpdateNextAvail(Ptr<RdmaQueuePair> qp, Time interframeGap, uint32_t
 		sendingTime = interframeGap + Seconds(qp->m_rate.CalculateTxTime(pkt_size));
 	else
 		sendingTime = interframeGap + Seconds(qp->m_max_rate.CalculateTxTime(pkt_size));
-	qp->m_nextAvail = Simulator::Now() + sendingTime;
+	// Every packet draws Uniform[-J, J] around the line-rate gap. The NIC
+	// cannot start the next packet before this one has left the wire, so a
+	// negative draw is clipped and only a late draw opens a gap.
+	if (m_txJitterNs > 0){
+		int64_t jitterNs = (int64_t)m_jitter->GetInteger(0, 2 * m_txJitterNs) - (int64_t)m_txJitterNs;
+		Time gap = sendingTime + NanoSeconds(jitterNs);
+		if (gap < sendingTime)
+			gap = sendingTime;
+		qp->m_nextAvail = Simulator::Now() + gap;
+	}else
+		qp->m_nextAvail = Simulator::Now() + sendingTime;
 }
 
 void RdmaHw::ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate){

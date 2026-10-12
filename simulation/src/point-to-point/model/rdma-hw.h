@@ -8,6 +8,7 @@
 #include "qbb-net-device.h"
 #include <unordered_map>
 #include "pint.h"
+#include "ns3/random-variable-stream.h"
 
 namespace ns3 {
 
@@ -35,8 +36,12 @@ public:
 	uint32_t m_chunk;
 	uint32_t m_ack_interval;
 	bool m_backto0;
+	bool m_enableNack; // false: a gap does not generate a NACK or go-back-N
 	bool m_var_win, m_fast_react;
 	bool m_rateBound;
+	uint32_t m_txJitterNs; // per-packet send jitter, uniform in [-J, J]; 0 off
+	uint32_t m_jitterSeed;
+	Ptr<UniformRandomVariable> m_jitter;
 	std::vector<RdmaInterfaceMgr> m_nic; // list of running nic controlled by this RdmaHw
 	std::unordered_map<uint64_t, Ptr<RdmaQueuePair> > m_qpMap; // mapping from uint64_t to qp
 	std::unordered_map<uint64_t, Ptr<RdmaRxQueuePair> > m_rxQpMap; // mapping from uint64_t to rx qp

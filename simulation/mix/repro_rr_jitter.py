@@ -123,6 +123,7 @@ def analyze(rows, neigh, edges, cores, topo):
     first = {}
     link_qmax = {}
     dequ = []
+    n_enqu = 0
     for r in rows:
         nbr = neigh.get((r["node"], r["intf"]))
         if nbr is None:
@@ -133,6 +134,7 @@ def analyze(rows, neigh, edges, cores, topo):
                 src_edge = topo["edge"][r["sip"] // topo["w"]]
                 if r["node"] != src_edge:
                     continue
+                n_enqu += 1
                 key = (r["sip"], r["dip"], r["seq"])
                 prev = first.get(key)
                 if prev is None or r["time"] < prev[0]:
@@ -197,6 +199,9 @@ def analyze(rows, neigh, edges, cores, topo):
         "overlap_frac": round(overlap, 4),
         "up_gbps": sorted(up_rates),
         "gap_ns": sorted(gaps)[len(gaps) // 2] if gaps else PKT_NS,
+        "mean_gap_ns": round(sum(gaps) / float(len(gaps)), 2) if gaps else PKT_NS,
+        "n_enqu": n_enqu,
+        "n_first": len(first),
         "t0": t0,
         "t1": t1,
     }

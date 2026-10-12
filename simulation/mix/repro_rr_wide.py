@@ -320,13 +320,13 @@ def uplink_balance(row, flow="0-48"):
     return (total * total) / float(n_ports * square)
 
 
-def _balance_series(rows):
+def _balance_series(rows, flow="0-48"):
     import numpy as np
 
     xs = sorted(set(r["jitter_ns"] for r in rows))
     bal, err = [], []
     for x in xs:
-        g = [100.0 * uplink_balance(r) for r in rows if r["jitter_ns"] == x]
+        g = [100.0 * uplink_balance(r, flow) for r in rows if r["jitter_ns"] == x]
         mean = float(np.mean(g))
         bal.append(mean)
         err.append([mean - min(g), max(g) - mean])
@@ -636,6 +636,71 @@ def _draw_traffic_align(plt):
     plt.close(fig)
 
 
+def _plot_pair2(plt, data):
+    fig, ax = plt.subplots(figsize=(8.2, 5.2), dpi=140)
+    fig.subplots_adjust(left=0.11, right=0.86, bottom=0.20, top=0.88)
+    short = [r for r in data["short"] if r["case"] == "pair2"]
+    long_rows = [r for r in data["long"] if r["case"] == "pair2" and r["nbytes"] == 1600000 and r.get("order", "seq") == "seq"]
+    xs, q, err, _rate = _series("pair2", short, 160000)
+    ax.errorbar(xs, q, yerr=err, color="#1d4ed8", marker="o", lw=2, ms=7, capsize=3, label="160 KB 队列")
+    lxs, lq, lerr, _ = _series("pair2", long_rows, 1600000)
+    ax.errorbar(lxs, lq, yerr=lerr, color="#c2410c", marker="s", lw=2, ms=7, capsize=3, label="1.6 MB 队列")
+    ax.set_xlabel("每个包的抖动 J（ns）")
+    ax.set_ylabel("热下行最大队列 / 消息大小")
+    ax.set_ylim(-0.05, 1.35)
+    ax.set_title("400 Gbps，2 台，顺序启动")
+    ax.spines["top"].set_visible(False)
+    ax2 = ax.twinx()
+    bxs, bal, berr = _balance_series(short, "0-6")
+    ax2.errorbar(bxs, bal, yerr=berr, color="#1d4ed8", marker="^", lw=1.4, ms=6, ls=":", capsize=3, label="160 KB 上联均衡")
+    blxs, lbal, lberr = _balance_series(long_rows, "0-6")
+    ax2.errorbar(blxs, lbal, yerr=lberr, color="#c2410c", marker="v", lw=1.4, ms=6, ls=":", capsize=3, label="1.6 MB 上联均衡")
+    ax2.set_ylabel("H0 在 2 个上联上的均衡程度（%）")
+    ax2.set_ylim(-5, 115)
+    ax2.spines["top"].set_visible(False)
+    lines, labels = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines + lines2, labels + labels2, frameon=False, fontsize=8, loc="center right")
+    fig.text(
+        0.48,
+        0.035,
+        "实线是左轴的队列。虚线是右轴：H0 的包在 C0、C1 上有多匀。100% 是两个口一样多，50% 是全走一个口。",
+        ha="center",
+        fontsize=8,
+        color="#344054",
+    )
+    _save(fig, "fattree-400-queue-2.png")
+    plt.close(fig)
+
+
+def fill_pair2(root):
+    path = os.path.join(root, "results.json")
+    data = json.load(open(path))
+    have = set(
+        (r["jitter_ns"], r["seed"])
+        for r in data["long"]
+        if r["case"] == "pair2" and r["nbytes"] == 1600000 and r.get("order", "seq") == "seq"
+    )
+    added = []
+    for jitter in (0, 2, 4, 8, 16, 32):
+        seeds = [1] if jitter == 0 else [1, 2]
+        for seed in seeds:
+            if (jitter, seed) in have:
+                print("skip long", jitter, seed, flush=True)
+                continue
+            print("long", jitter, seed, flush=True)
+            summary = run_case(os.path.join(root, "pair2-long-j%d-s%d" % (jitter, seed)), "pair2", 1600000, jitter, seed, "seq")
+            added.append(summary)
+            _emit(summary)
+            print("  balance", round(100 * uplink_balance(summary, "0-6"), 1), flush=True)
+    data["long"].extend(added)
+    with open(path, "w") as f:
+        json.dump(data, f)
+    print("WROTE", path, "added", len(added))
+    plt = _font()
+    _plot_pair2(plt, data)
+
+
 def fill_long(root):
     path = os.path.join(root, "results.json")
     data = json.load(open(path))
@@ -671,5 +736,7 @@ if __name__ == "__main__":
         draw_diagrams()
     elif len(sys.argv) > 1 and sys.argv[1] == "--fill-long":
         fill_long(sys.argv[2] if len(sys.argv) > 2 else "/tmp/rr-wide2")
+    elif len(sys.argv) > 1 and sys.argv[1] == "--fill-pair2":
+        fill_pair2(sys.argv[2] if len(sys.argv) > 2 else "/tmp/rr-wide")
     else:
         main()

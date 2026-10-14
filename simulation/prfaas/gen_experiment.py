@@ -6,8 +6,10 @@ truncated lognormal uncached length, only L > 19.4K on the inter-cluster
 link, KV size fit to Table 5, uniform arrivals at 1.61 req/s.
 
 The simulator is RDMA, so each KV is one or more queue pairs. PFC stays on
-(USE_DYNAMIC_PFC_THRESHOLD 1). CC parameters follow simulation/run.py at
-100 Gbps, PD-side NICs are 400 Gbps, the fastest INT-encodable rate above the WAN.
+(USE_DYNAMIC_PFC_THRESHOLD 1). CC additive increases follow simulation/run.py
+scaled to the WAN rate. DCTCP's per-RTT increment and TIMELY's latency
+thresholds follow this path's unloaded RTT. PD-side NICs are 400 Gbps, the
+fastest INT-encodable rate above the WAN.
 """
 
 import argparse
@@ -118,28 +120,63 @@ def write_flows(path, requests):
         f.write("\n".join(rows) + "\n")
 
 
-def cc_params(cc):
-    """Parameters copied from simulation/run.py --bw 100."""
+def base_rtt_ns(km, wan_gbps):
+    """Unloaded RTT, same definition as scratch/third.cc.
+
+    One way is 1 us sender access + 5 us/km fiber + 1 us receiver access.
+    Serialization is one 1000-byte packet on 100 Gbps, the WAN, and 400 Gbps.
+    RTT = 2 * propagation + one-way serialization.
+    """
+    prop = 2 * (1000 + km * NS_PER_KM + 1000)
+    tx = 80 + int(8000 / wan_gbps) + 20
+    return prop + tx
+
+
+def cc_params(cc, wan_gbps, km):
+    """run.py formulas at the WAN rate, plus RTT taken from this path.
+
+    DCQCN, HPCC, and TIMELY additive increases follow simulation/run.py,
+    which scales them with link rate (the --bw argument). The rate used
+    here is the WAN, the link the flows actually share.
+
+    DCTCP's AI in run.py is one 1000-byte MTU per 13 us. That 13 us is the
+    fat-tree RTT the script was written for. Here the increment is one MTU
+    per this path's unloaded RTT.
+
+    TIMELY's built-in TLow/THigh/minRtt are 50/500/20 us. Those sit on a
+    20 us fabric: 30 us of queueing leaves the pure-increase region, and
+    480 us of queueing is the high threshold. The same queueing gaps are
+    added on top of this path's unloaded RTT, and the gradient is
+    normalized by that RTT.
+    """
+    bw = int(wan_gbps)
+    rtt = base_rtt_ns(km, bw)
+    # 1000 bytes * 8 / RTT, in Mb/s.
+    dctcp_ai = max(1, int(round(8e6 / rtt)))
+    tlow = rtt + 30000
+    thigh = rtt + 480000
+    common = dict(dctcp_ai=dctcp_ai, u_tgt=0.95, pint_log_base=1.05, pint_prob=1.0,
+                  tlow=tlow, thigh=thigh, minrtt=rtt, rtt_ns=rtt)
     if cc == "dcqcn":
-        return dict(mode=1, ai=20, hai=200, dctcp_ai=1000, has_win=0, vwin=0,
-                    us=0, u_tgt=0.95, int_multi=1, ack_prio=1, g=0.00390625,
-                    pint_log_base=1.05, pint_prob=1.0, ecn="dcqcn")
+        common.update(mode=1, ai=5 * bw // 25, hai=50 * bw // 25, has_win=0, vwin=0,
+                      us=0, int_multi=1, ack_prio=1, g=0.00390625, ecn="dcqcn")
+        return common
     if cc == "hp":
-        return dict(mode=3, ai=40, hai=40, dctcp_ai=1000, has_win=1, vwin=1,
-                    us=1, u_tgt=0.95, int_multi=4, ack_prio=0, g=0.00390625,
-                    pint_log_base=1.05, pint_prob=1.0, ecn="std")
+        common.update(mode=3, ai=10 * bw // 25, hai=10 * bw // 25, has_win=1, vwin=1,
+                      us=1, int_multi=max(1, bw // 25), ack_prio=0, g=0.00390625, ecn="std")
+        return common
     if cc == "timely":
-        return dict(mode=7, ai=100, hai=500, dctcp_ai=1000, has_win=0, vwin=0,
-                    us=0, u_tgt=0.95, int_multi=1, ack_prio=1, g=0.00390625,
-                    pint_log_base=1.05, pint_prob=1.0, ecn="std")
+        common.update(mode=7, ai=10 * bw // 10, hai=50 * bw // 10, has_win=0, vwin=0,
+                      us=0, int_multi=1, ack_prio=1, g=0.00390625, ecn="std")
+        return common
     if cc == "dctcp":
-        return dict(mode=8, ai=10, hai=10, dctcp_ai=615, has_win=1, vwin=1,
-                    us=0, u_tgt=0.95, int_multi=1, ack_prio=0, g=0.0625,
-                    pint_log_base=1.05, pint_prob=1.0, ecn="dctcp")
+        common.update(mode=8, ai=10, hai=10, has_win=1, vwin=1,
+                      us=0, int_multi=1, ack_prio=0, g=0.0625, ecn="dctcp")
+        return common
     if cc == "hpccPint":
-        return dict(mode=10, ai=40, hai=40, dctcp_ai=1000, has_win=1, vwin=1,
-                    us=1, u_tgt=0.95, int_multi=4, ack_prio=0, g=0.00390625,
-                    pint_log_base=1.05, pint_prob=1.0, ecn="std")
+        common.update(mode=10, ai=10 * bw // 25, hai=10 * bw // 25, has_win=1, vwin=1,
+                      us=1, int_multi=max(1, bw // 25), ack_prio=0, g=0.00390625, ecn="std")
+        return common
     raise ValueError(cc)
 
 
@@ -154,8 +191,8 @@ def ecn_maps(kind):
     return kmin, kmax, pmax
 
 
-def write_config(path, topo, flow, trace, out_dir, tag, cc, stop_s):
-    p = cc_params(cc)
+def write_config(path, topo, flow, trace, out_dir, tag, cc, stop_s, km, wan_gbps=100):
+    p = cc_params(cc, wan_gbps, km)
     kmin, kmax, pmax = ecn_maps(p["ecn"])
     text = """ENABLE_QCN 1
 USE_DYNAMIC_PFC_THRESHOLD 1
@@ -182,6 +219,9 @@ RATE_AI {ai}Mb/s
 RATE_HAI {hai}Mb/s
 MIN_RATE 1000Mb/s
 DCTCP_RATE_AI {dctcp_ai}Mb/s
+TIMELY_TLOW {tlow}
+TIMELY_THIGH {thigh}
+TIMELY_MINRTT {minrtt}
 
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 4000
@@ -218,6 +258,7 @@ QLEN_MON_END {qend}
 """.format(
         topo=topo, flow=flow, trace=trace, out=out_dir, tag=tag, stop=stop_s,
         mode=p["mode"], g=p["g"], ai=p["ai"], hai=p["hai"], dctcp_ai=p["dctcp_ai"],
+        tlow=p["tlow"], thigh=p["thigh"], minrtt=p["minrtt"],
         has_win=p["has_win"], vwin=p["vwin"], us=p["us"], u_tgt=p["u_tgt"],
         int_multi=p["int_multi"], pint_log_base=p["pint_log_base"],
         pint_prob=p["pint_prob"], ack_prio=p["ack_prio"],
@@ -270,7 +311,7 @@ def main():
             for cc in ccs:
                 tag = "%s_c%d_%dkm" % (cc, n_conn, km)
                 cfg = os.path.join(out, "config_%s.txt" % tag)
-                write_config(cfg, topo, flow, trace, out, tag, cc, stop_s)
+                write_config(cfg, topo, flow, trace, out, tag, cc, stop_s, km)
                 jobs.append({"tag": tag, "config": cfg, "cc": cc, "n_conn": n_conn, "km": km})
 
     with open(os.path.join(out, "jobs.json"), "w") as f:

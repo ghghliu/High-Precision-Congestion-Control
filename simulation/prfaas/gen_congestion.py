@@ -138,7 +138,12 @@ def split(total, n):
 
 
 def config_text(built, paths, spec):
-    p = cc_params(spec["cc"])
+    p = cc_params(spec["cc"], spec["wan_gbps"], spec["km"])
+    spec["cc_params"] = {
+        "ai": p["ai"], "hai": p["hai"], "dctcp_ai": p["dctcp_ai"],
+        "int_multi": p["int_multi"], "tlow_ns": p["tlow"],
+        "thigh_ns": p["thigh"], "minrtt_ns": p["minrtt"], "rtt_ns": p["rtt_ns"],
+    }
     rates = sorted(set([100, spec["wan_gbps"], 400]))
     kmin, kmax, pmax = ecn_for(rates, p["ecn"] == "dctcp")
     return """ENABLE_QCN 1
@@ -166,6 +171,9 @@ RATE_AI {ai}Mb/s
 RATE_HAI {hai}Mb/s
 MIN_RATE 1000Mb/s
 DCTCP_RATE_AI {dctcp_ai}Mb/s
+TIMELY_TLOW {tlow}
+TIMELY_THIGH {thigh}
+TIMELY_MINRTT {minrtt}
 
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 4000
@@ -203,6 +211,7 @@ QLEN_MON_END {qend}
         topo=paths["topo"], flow=paths["flow"], trace=paths["trace"],
         out=paths["out"], tag=spec["tag"], stop=built["stop_s"],
         mode=p["mode"], g=p["g"], ai=p["ai"], hai=p["hai"], dctcp_ai=p["dctcp_ai"],
+        tlow=p["tlow"], thigh=p["thigh"], minrtt=p["minrtt"],
         has_win=p["has_win"], vwin=p["vwin"], us=p["us"], u_tgt=p["u_tgt"],
         int_multi=p["int_multi"], pint_log_base=p["pint_log_base"],
         pint_prob=p["pint_prob"], ack_prio=p["ack_prio"],

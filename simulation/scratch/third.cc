@@ -55,6 +55,8 @@ double rate_decrease_interval = 4;
 uint32_t fast_recovery_times = 5;
 std::string rate_ai, rate_hai, min_rate = "100Mb/s";
 std::string dctcp_rate_ai = "1000Mb/s";
+// Defaults match RdmaHw: a ~20 us fabric. Config overrides them per path.
+uint64_t timely_tlow = 50000, timely_thigh = 500000, timely_minrtt = 20000;
 
 bool clamp_target_rate = false, l2_back_to_zero = false;
 double error_rate_per_link = 0.0;
@@ -577,6 +579,15 @@ int main(int argc, char *argv[])
 			}else if (key.compare("DCTCP_RATE_AI") == 0){
 				conf >> dctcp_rate_ai;
 				std::cout << "DCTCP_RATE_AI\t\t\t\t" << dctcp_rate_ai << "\n";
+			}else if (key.compare("TIMELY_TLOW") == 0){
+				conf >> timely_tlow;
+				std::cout << "TIMELY_TLOW\t\t\t\t" << timely_tlow << "\n";
+			}else if (key.compare("TIMELY_THIGH") == 0){
+				conf >> timely_thigh;
+				std::cout << "TIMELY_THIGH\t\t\t\t" << timely_thigh << "\n";
+			}else if (key.compare("TIMELY_MINRTT") == 0){
+				conf >> timely_minrtt;
+				std::cout << "TIMELY_MINRTT\t\t\t\t" << timely_minrtt << "\n";
 			}else if (key.compare("PFC_OUTPUT_FILE") == 0){
 				conf >> pfc_output_file;
 				std::cout << "PFC_OUTPUT_FILE\t\t\t\t" << pfc_output_file << '\n';
@@ -880,6 +891,9 @@ int main(int argc, char *argv[])
 			rdmaHw->SetAttribute("TargetUtil", DoubleValue(u_target));
 			rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
 			rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
+			rdmaHw->SetAttribute("TimelyTLow", UintegerValue(timely_tlow));
+			rdmaHw->SetAttribute("TimelyTHigh", UintegerValue(timely_thigh));
+			rdmaHw->SetAttribute("TimelyMinRtt", UintegerValue(timely_minrtt));
 			rdmaHw->SetPintSmplThresh(pint_prob);
 			// create and install RdmaDriver
 			Ptr<RdmaDriver> rdma = CreateObject<RdmaDriver>();

@@ -46,7 +46,7 @@ def collision_flows():
     ]
 
 
-def write_config(directory, bw_bps, lb_mode, nbytes, stop, tx_jitter_ns=0, tx_jitter_seed=1, enable_nack=1, tx_jitter_mode=0, arrival_jitter_ns=0):
+def write_config(directory, bw_bps, lb_mode, nbytes, stop, tx_jitter_ns=0, tx_jitter_seed=1, enable_nack=1, tx_jitter_mode=0, arrival_jitter_ns=0, rr_group_ports=0):
     d = os.path.abspath(directory)
     text = """ENABLE_QCN 0
 USE_DYNAMIC_PFC_THRESHOLD 1
@@ -90,6 +90,7 @@ TX_JITTER_NS {jitter}
 TX_JITTER_SEED {jseed}
 TX_JITTER_MODE {jmode}
 ARRIVAL_JITTER_NS {arr}
+RR_GROUP_PORTS {grp}
 ENABLE_NACK {nack}
 ACK_HIGH_PRIO 0
 LINK_DOWN 0 0 0
@@ -101,7 +102,7 @@ BUFFER_SIZE 64
 QLEN_MON_FILE {d}/qlen.txt
 QLEN_MON_START 20000000000
 QLEN_MON_END 20000000000
-""".format(d=d, stop=stop, lb=lb_mode, bw=bw_bps, jitter=tx_jitter_ns, jseed=tx_jitter_seed, jmode=tx_jitter_mode, arr=arrival_jitter_ns, nack=enable_nack)
+""".format(d=d, stop=stop, lb=lb_mode, bw=bw_bps, jitter=tx_jitter_ns, jseed=tx_jitter_seed, jmode=tx_jitter_mode, arr=arrival_jitter_ns, grp=rr_group_ports, nack=enable_nack)
     with open(os.path.join(directory, "config.txt"), "w") as f:
         f.write(text)
 

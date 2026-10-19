@@ -58,6 +58,11 @@ TypeId SwitchNode::GetTypeId (void)
 			UintegerValue(0),
 			MakeUintegerAccessor(&SwitchNode::m_arrivalJitterNs),
 			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("RrGroupPorts",
+			"Pofan. 0: one RR pointer for the whole switch. N: on the source switch, ingress ports share a pointer in blocks of N (ports 1-N, N+1-2N, ...).",
+			UintegerValue(0),
+			MakeUintegerAccessor(&SwitchNode::m_rrGroupPorts),
+			MakeUintegerChecker<uint32_t>())
   ;
   return tid;
 }
@@ -65,7 +70,9 @@ TypeId SwitchNode::GetTypeId (void)
 SwitchNode::SwitchNode(){
 	m_ecmpSeed = m_id;
 	m_lbMode = 0;
-	m_rrPtr = 0;
+	m_rrGroupPorts = 0;
+	for (uint32_t i = 0; i < pCnt; i++)
+		m_rrPtr[i] = 0;
 	m_roundSeed = 1;
 	m_arrivalJitterNs = 0;
 	m_node_type = 1;
@@ -121,8 +128,20 @@ int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 				return ia < ib;
 			return a < b;
 		});
-		uint32_t idx = m_rrPtr % ordered.size();
-		m_rrPtr++;
+		// Loopback is ifIndex 0, so host ports are 1..N. Group 0 is ports 1-4 when N is 4.
+		uint32_t group = 0;
+		if (m_rrGroupPorts > 0){
+			FlowIdTag tag;
+			if (p->PeekPacketTag(tag)){
+				uint32_t inDev = tag.GetFlowId();
+				uint32_t port = inDev == 0 ? 0 : inDev - 1;
+				group = port / m_rrGroupPorts;
+			}
+			if (group >= pCnt)
+				group = pCnt - 1;
+		}
+		uint32_t idx = m_rrPtr[group] % ordered.size();
+		m_rrPtr[group]++;
 		return ordered[idx];
 	}
 

@@ -63,6 +63,11 @@ TypeId SwitchNode::GetTypeId (void)
 			UintegerValue(0),
 			MakeUintegerAccessor(&SwitchNode::m_rrGroupPorts),
 			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("RrHoldPackets",
+			"How many packets stay on the current RR uplink before the pointer advances. 1 is per-packet RR. 2, 4, 16 keep that many consecutive packets on one uplink.",
+			UintegerValue(1),
+			MakeUintegerAccessor(&SwitchNode::m_rrHoldPackets),
+			MakeUintegerChecker<uint32_t>())
   ;
   return tid;
 }
@@ -71,8 +76,11 @@ SwitchNode::SwitchNode(){
 	m_ecmpSeed = m_id;
 	m_lbMode = 0;
 	m_rrGroupPorts = 0;
-	for (uint32_t i = 0; i < pCnt; i++)
+	m_rrHoldPackets = 1;
+	for (uint32_t i = 0; i < pCnt; i++){
 		m_rrPtr[i] = 0;
+		m_rrRun[i] = 0;
+	}
 	m_roundSeed = 1;
 	m_arrivalJitterNs = 0;
 	m_node_type = 1;
@@ -140,8 +148,15 @@ int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 			if (group >= pCnt)
 				group = pCnt - 1;
 		}
+		uint32_t hold = m_rrHoldPackets == 0 ? 1 : m_rrHoldPackets;
 		uint32_t idx = m_rrPtr[group] % ordered.size();
-		m_rrPtr[group]++;
+		// Per-packet RR is hold 1. A larger hold keeps this many consecutive
+		// packets on the same uplink, then advances the pointer once.
+		m_rrRun[group]++;
+		if (m_rrRun[group] >= hold){
+			m_rrRun[group] = 0;
+			m_rrPtr[group]++;
+		}
 		return ordered[idx];
 	}
 

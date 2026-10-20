@@ -8,6 +8,7 @@
 #include "qbb-net-device.h"
 #include <unordered_map>
 #include "pint.h"
+#include "ns3/random-variable-stream.h"
 
 namespace ns3 {
 
@@ -35,8 +36,13 @@ public:
 	uint32_t m_chunk;
 	uint32_t m_ack_interval;
 	bool m_backto0;
+	bool m_enableNack; // false: a gap does not generate a NACK or go-back-N
 	bool m_var_win, m_fast_react;
 	bool m_rateBound;
+	uint32_t m_txJitterNs; // per-packet send jitter, uniform in [-J, J]; 0 off
+	uint32_t m_txJitterMode; // 0: stretch the gap, 1: phase on the line-rate grid
+	uint32_t m_jitterSeed;
+	Ptr<UniformRandomVariable> m_jitter;
 	std::vector<RdmaInterfaceMgr> m_nic; // list of running nic controlled by this RdmaHw
 	std::unordered_map<uint64_t, Ptr<RdmaQueuePair> > m_qpMap; // mapping from uint64_t to qp
 	std::unordered_map<uint64_t, Ptr<RdmaRxQueuePair> > m_rxQpMap; // mapping from uint64_t to rx qp
@@ -80,6 +86,7 @@ public:
 	Ptr<Packet> GetNxtPacket(Ptr<RdmaQueuePair> qp); // get next packet to send, inc snd_nxt
 	void PktSent(Ptr<RdmaQueuePair> qp, Ptr<Packet> pkt, Time interframeGap);
 	void UpdateNextAvail(Ptr<RdmaQueuePair> qp, Time interframeGap, uint32_t pkt_size);
+	int64_t DrawJitterNs();
 	void ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate);
 	/******************************
 	 * Mellanox's version of DCQCN

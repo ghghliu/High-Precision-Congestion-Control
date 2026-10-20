@@ -10,6 +10,10 @@
 #include "qbb-net-device.h"
 #include "ppp-header.h"
 #include "ns3/int-header.h"
+#include "ns3/custom-header.h"
+#include "ns3/node-list.h"
+#include "ns3/simulator.h"
+#include <algorithm>
 #include <cmath>
 
 namespace ns3 {
@@ -39,12 +43,53 @@ TypeId SwitchNode::GetTypeId (void)
 			UintegerValue(9000),
 			MakeUintegerAccessor(&SwitchNode::m_maxRtt),
 			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("LbMode",
+			"Multipath load balancing. 0: 5-tuple ECMP, 1: one RR pointer per switch, slot 0 = lowest peer node id. 2: same RR, but each round the host ports are presented in a new random order.",
+			UintegerValue(0),
+			MakeUintegerAccessor(&SwitchNode::m_lbMode),
+			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("RoundSeed",
+			"Seed mixed into the per-round host order when LbMode is 2.",
+			UintegerValue(1),
+			MakeUintegerAccessor(&SwitchNode::m_roundSeed),
+			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("ArrivalJitter",
+			"On a leaf, each packet from a host is held Uniform[0, J] ns before RR. 0 disables. The NIC still sends at line rate.",
+			UintegerValue(0),
+			MakeUintegerAccessor(&SwitchNode::m_arrivalJitterNs),
+			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("RrGroupPorts",
+			"Pofan. 0: one RR pointer for the whole switch. N: on the source switch, ingress ports share a pointer in blocks of N (ports 1-N, N+1-2N, ...).",
+			UintegerValue(0),
+			MakeUintegerAccessor(&SwitchNode::m_rrGroupPorts),
+			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("RrHoldPackets",
+			"How many packets stay on the current RR uplink before the pointer advances. 1 is per-packet RR. 2, 4, 16 keep that many consecutive packets on one uplink.",
+			UintegerValue(1),
+			MakeUintegerAccessor(&SwitchNode::m_rrHoldPackets),
+			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("RrPtrRandom",
+			"0: every RR pointer starts at uplink 0. 1: each ingress group draws its own starting uplink, uniform over the uplinks, salted by RoundSeed.",
+			UintegerValue(0),
+			MakeUintegerAccessor(&SwitchNode::m_rrPtrRandom),
+			MakeUintegerChecker<uint32_t>())
   ;
   return tid;
 }
 
 SwitchNode::SwitchNode(){
 	m_ecmpSeed = m_id;
+	m_lbMode = 0;
+	m_rrGroupPorts = 0;
+	m_rrHoldPackets = 1;
+	m_rrPtrRandom = 0;
+	for (uint32_t i = 0; i < pCnt; i++){
+		m_rrPtr[i] = 0;
+		m_rrRun[i] = 0;
+		m_rrPtrInited[i] = 0;
+	}
+	m_roundSeed = 1;
+	m_arrivalJitterNs = 0;
 	m_node_type = 1;
 	m_mmu = CreateObject<SwitchMmu>();
 	for (uint32_t i = 0; i < pCnt; i++)
@@ -59,6 +104,21 @@ SwitchNode::SwitchNode(){
 		m_u[i] = 0;
 }
 
+uint32_t SwitchNode::PeerNodeId(uint32_t ifIndex) const{
+	Ptr<NetDevice> dev = m_devices[ifIndex];
+	Ptr<Channel> channel = dev->GetChannel();
+	if (channel == 0)
+		return 0xffffffffu;
+	for (uint32_t i = 0; i < channel->GetNDevices(); ++i){
+		Ptr<NetDevice> other = channel->GetDevice(i);
+		if (other == 0 || other->GetNode() == 0)
+			continue;
+		if (other->GetNode()->GetId() != GetId())
+			return other->GetNode()->GetId();
+	}
+	return 0xffffffffu;
+}
+
 int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 	// look up entries
 	auto entry = m_rtTable.find(ch.dip);
@@ -69,6 +129,55 @@ int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 
 	// entry found
 	auto &nexthops = entry->second;
+
+	// Simple RR: one pointer per switch, advanced once per packet that has a
+	// choice. Slot 0 is the lowest peer node id, not routing-table insertion
+	// order (that order follows BFS pointer order and previously sent the
+	// first packet to the higher-id core). The downward hop is unique.
+	if ((m_lbMode == 1 || m_lbMode == 2) && nexthops.size() > 1){
+		std::vector<int> ordered(nexthops.begin(), nexthops.end());
+		std::sort(ordered.begin(), ordered.end(), [this](int a, int b){
+			uint32_t ia = PeerNodeId(a);
+			uint32_t ib = PeerNodeId(b);
+			if (ia != ib)
+				return ia < ib;
+			return a < b;
+		});
+		// Loopback is ifIndex 0, so host ports are 1..N. Group 0 is ports 1-4 when N is 4.
+		uint32_t group = 0;
+		if (m_rrGroupPorts > 0){
+			FlowIdTag tag;
+			if (p->PeekPacketTag(tag)){
+				uint32_t inDev = tag.GetFlowId();
+				uint32_t port = inDev == 0 ? 0 : inDev - 1;
+				group = port / m_rrGroupPorts;
+			}
+			if (group >= pCnt)
+				group = pCnt - 1;
+		}
+		uint32_t hold = m_rrHoldPackets == 0 ? 1 : m_rrHoldPackets;
+		// Draw once, before the first packet of this group. A later packet
+		// must not redraw when the pointer wraps back through slot 0.
+		if (m_rrPtrRandom && !m_rrPtrInited[group]){
+			uint32_t x = (m_id * 0x9e3779b1u) ^ (group * 0x85ebca6bu) ^ (m_roundSeed * 0xc2b2ae35u);
+			x ^= x >> 16;
+			x *= 0x7feb352du;
+			x ^= x >> 15;
+			x *= 0x846ca68bu;
+			x ^= x >> 16;
+			m_rrPtr[group] = ordered.empty() ? 0 : x % ordered.size();
+			m_rrPtrInited[group] = 1;
+		}
+		uint32_t idx = m_rrPtr[group] % ordered.size();
+		// Per-packet RR is hold 1. A larger hold keeps this many consecutive
+		// packets on the same uplink, then advances the pointer once.
+		m_rrRun[group]++;
+		if (m_rrRun[group] >= hold){
+			m_rrRun[group] = 0;
+			m_rrPtr[group]++;
+		}
+		return ordered[idx];
+	}
 
 	// pick one next hop based on hash
 	union {
@@ -186,8 +295,77 @@ void SwitchNode::ClearTable(){
 	m_rtTable.clear();
 }
 
+bool SwitchNode::IsHostPort(uint32_t ifIndex) const{
+	uint32_t peer = PeerNodeId(ifIndex);
+	if (peer == 0xffffffffu)
+		return false;
+	return NodeList::GetNode(peer)->GetNodeType() == 0;
+}
+
+uint32_t SwitchNode::HostRank(uint32_t round, uint32_t inDev) const{
+	std::vector<uint32_t> hosts;
+	for (uint32_t i = 0; i < GetNDevices(); ++i){
+		if (IsHostPort(i))
+			hosts.push_back(i);
+	}
+	std::sort(hosts.begin(), hosts.end(), [this, round](uint32_t a, uint32_t b){
+		auto mix = [this, round](uint32_t port){
+			uint32_t x = (m_id * 0x9e3779b1u) ^ (round * 0x85ebca6bu) ^ (port * 0xc2b2ae35u) ^ m_roundSeed;
+			x ^= x >> 16;
+			x *= 0x7feb352du;
+			x ^= x >> 15;
+			x *= 0x846ca68bu;
+			x ^= x >> 16;
+			return x;
+		};
+		uint32_t ha = mix(a);
+		uint32_t hb = mix(b);
+		if (ha != hb)
+			return ha < hb;
+		return a < b;
+	});
+	for (uint32_t rank = 0; rank < hosts.size(); ++rank){
+		if (hosts[rank] == inDev)
+			return rank;
+	}
+	return 0;
+}
+
+uint32_t SwitchNode::ArrivalDelay(uint32_t seq, uint32_t sip) const{
+	if (m_arrivalJitterNs == 0)
+		return 0;
+	uint32_t x = (m_id * 0x9e3779b1u) ^ (seq * 0x85ebca6bu) ^ sip ^ (m_roundSeed * 0xc2b2ae35u);
+	x ^= x >> 16;
+	x *= 0x7feb352du;
+	x ^= x >> 15;
+	x *= 0x846ca68bu;
+	x ^= x >> 16;
+	return x % (m_arrivalJitterNs + 1);
+}
+
+void SwitchNode::ForwardShuffled(Ptr<Packet> p){
+	CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+	ch.getInt = 1;
+	p->PeekHeader(ch);
+	SendToDev(p, ch);
+}
+
 // This function can only be called in switch mode
 bool SwitchNode::SwitchReceiveFromDevice(Ptr<NetDevice> device, Ptr<Packet> packet, CustomHeader &ch){
+	// Line-rate senders stay on a 20 ns grid. On the way up, each round's
+	// host ports are released to the RR pointer in a new random order.
+	// The last rank is one nanosecond per host, inside one packet time.
+	if (ch.l3Prot == 0x11 && IsHostPort(device->GetIfIndex())){
+		uint32_t delay = 0;
+		if (m_lbMode == 2)
+			delay = HostRank(ch.udp.seq / 1000, device->GetIfIndex());
+		else if (m_arrivalJitterNs > 0)
+			delay = ArrivalDelay(ch.udp.seq, ch.sip);
+		if (delay > 0 || m_lbMode == 2){
+			Simulator::Schedule(NanoSeconds(delay), &SwitchNode::ForwardShuffled, this, packet);
+			return true;
+		}
+	}
 	SendToDev(packet, ch);
 	return true;
 }

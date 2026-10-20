@@ -82,6 +82,7 @@ uint32_t tx_jitter_mode = 0; // 0: gap, 1: phase on the line-rate grid
 uint32_t arrival_jitter_ns = 0; // leaf hold, uniform [0, J], NIC stays at line rate
 uint32_t rr_group_ports = 0; // 0: one RR pointer per switch. 4: pofan, one pointer per 4 ingress ports
 uint32_t rr_hold_packets = 1; // 1: advance the RR pointer every packet. N: keep N packets on one uplink
+uint32_t rr_ptr_random = 0; // 0: pointers start at uplink 0. 1: each group draws its own uplink
 uint32_t enable_nack = 1; // 0: do not NACK a sequence gap
 
 uint32_t buffer_size = 16;
@@ -559,6 +560,9 @@ int main(int argc, char *argv[])
 			}else if (key.compare("RR_HOLD_PACKETS") == 0){
 				conf >> rr_hold_packets;
 				std::cout << "RR_HOLD_PACKETS\t\t" << rr_hold_packets << '\n';
+			}else if (key.compare("RR_PTR_RANDOM") == 0){
+				conf >> rr_ptr_random;
+				std::cout << "RR_PTR_RANDOM\t\t" << rr_ptr_random << '\n';
 			}else if (key.compare("ENABLE_NACK") == 0){
 				conf >> enable_nack;
 				std::cout << "ENABLE_NACK\t\t" << enable_nack << '\n';
@@ -977,6 +981,7 @@ int main(int argc, char *argv[])
 			sw->SetAttribute("ArrivalJitter", UintegerValue(arrival_jitter_ns));
 			sw->SetAttribute("RrGroupPorts", UintegerValue(rr_group_ports));
 			sw->SetAttribute("RrHoldPackets", UintegerValue(rr_hold_packets));
+			sw->SetAttribute("RrPtrRandom", UintegerValue(rr_ptr_random));
 			sw->SetAttribute("MaxRtt", UintegerValue(maxRtt));
 		}
 	}

@@ -68,6 +68,11 @@ TypeId SwitchNode::GetTypeId (void)
 			UintegerValue(1),
 			MakeUintegerAccessor(&SwitchNode::m_rrHoldPackets),
 			MakeUintegerChecker<uint32_t>())
+	.AddAttribute("RrPtrRandom",
+			"0: every RR pointer starts at uplink 0. 1: each ingress group draws its own starting uplink, uniform over the uplinks, salted by RoundSeed.",
+			UintegerValue(0),
+			MakeUintegerAccessor(&SwitchNode::m_rrPtrRandom),
+			MakeUintegerChecker<uint32_t>())
   ;
   return tid;
 }
@@ -77,9 +82,11 @@ SwitchNode::SwitchNode(){
 	m_lbMode = 0;
 	m_rrGroupPorts = 0;
 	m_rrHoldPackets = 1;
+	m_rrPtrRandom = 0;
 	for (uint32_t i = 0; i < pCnt; i++){
 		m_rrPtr[i] = 0;
 		m_rrRun[i] = 0;
+		m_rrPtrInited[i] = 0;
 	}
 	m_roundSeed = 1;
 	m_arrivalJitterNs = 0;
@@ -149,6 +156,18 @@ int SwitchNode::GetOutDev(Ptr<const Packet> p, CustomHeader &ch){
 				group = pCnt - 1;
 		}
 		uint32_t hold = m_rrHoldPackets == 0 ? 1 : m_rrHoldPackets;
+		// Draw once, before the first packet of this group. A later packet
+		// must not redraw when the pointer wraps back through slot 0.
+		if (m_rrPtrRandom && !m_rrPtrInited[group]){
+			uint32_t x = (m_id * 0x9e3779b1u) ^ (group * 0x85ebca6bu) ^ (m_roundSeed * 0xc2b2ae35u);
+			x ^= x >> 16;
+			x *= 0x7feb352du;
+			x ^= x >> 15;
+			x *= 0x846ca68bu;
+			x ^= x >> 16;
+			m_rrPtr[group] = ordered.empty() ? 0 : x % ordered.size();
+			m_rrPtrInited[group] = 1;
+		}
 		uint32_t idx = m_rrPtr[group] % ordered.size();
 		// Per-packet RR is hold 1. A larger hold keeps this many consecutive
 		// packets on the same uplink, then advances the pointer once.

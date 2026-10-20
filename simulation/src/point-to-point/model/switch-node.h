@@ -1,6 +1,7 @@
 #ifndef SWITCH_NODE_H
 #define SWITCH_NODE_H
 
+#include <stdint.h>
 #include <unordered_map>
 #include <ns3/node.h>
 #include "qbb-net-device.h"
@@ -18,8 +19,10 @@ class SwitchNode : public Node{
 	uint32_t m_lbMode; // 0: 5-tuple ECMP, 1: one RR pointer on this switch, 2: RR with a fresh host order each round
 	uint32_t m_rrGroupPorts; // 0: one switch-wide RR pointer. N: one pointer per N ingress ports (pofan)
 	uint32_t m_rrHoldPackets; // packets kept on the current slot before the pointer advances. 1: every packet
+	uint32_t m_rrPtrRandom; // 0: every group starts at uplink 0. 1: each group draws its own uplink in [0, degree)
 	uint32_t m_rrPtr[pCnt];  // next RR slot per ingress group; slot 0 is the lowest peer node id
 	uint32_t m_rrRun[pCnt];  // packets already sent on the current slot of this group
+	uint8_t m_rrPtrInited[pCnt]; // set once a random start has been drawn for this group
 	uint32_t m_roundSeed;
 	uint32_t m_arrivalJitterNs;
 	std::unordered_map<uint32_t, std::vector<int> > m_rtTable; // map from ip address (u32) to possible ECMP port (index of dev)
